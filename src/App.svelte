@@ -4,18 +4,17 @@
   import 'maplibre-gl/dist/maplibre-gl.css';
 
   const tripModules = import.meta.glob('../snapshots/*_gps.json', {
-    eager: true
-  });
-
-  const imageAssets = import.meta.glob('../snapshots/*.webp', {
-    eager: true,
-    as: 'url'
+    import: 'default'
   });
 
   function resolveImageUrl(name) {
     if (!name) return '';
-    const key = `../snapshots/${name}`;
-    return imageAssets[key] ?? '';
+    try {
+      return new URL(`../snapshots/${name}`, import.meta.url).href;
+    } catch (error) {
+      console.warn('Failed to resolve image URL for', name, error);
+      return '';
+    }
   }
 
   function escapeHtml(value) {
@@ -45,42 +44,195 @@
     ];
   }
 
-  const tripData = Object.entries(tripModules)
-    .map(([path, module]) => {
+  function mapTripToSegments(trip) {
+    if (!trip) return [];
+    if (Array.isArray(trip.segmentFeatures)) {
+      return trip.segmentFeatures;
+    }
+
+    const tripId = trip?.id ?? '';
+    const color = trip?.color ?? tripSummaryMap.get(tripId)?.color ?? '';
+    const validRecords = Array.isArray(trip.records)
+      ? trip.records.filter(
+          (record) =>
+            Number.isFinite(record?.latitude) && Number.isFinite(record?.longitude)
+        )
+      : [];
+
+    const segments = [];
+
+    for (let i = 0; i < validRecords.length - 1; i += 1) {
+      const current = validRecords[i];
+      const next = validRecords[i + 1];
+      const coordsCurrent = [Number(current.longitude), Number(current.latitude)];
+      const coordsNext = [Number(next.longitude), Number(next.latitude)];
+      if (
+        !Number.isFinite(coordsCurrent[0]) ||
+        !Number.isFinite(coordsCurrent[1]) ||
+        !Number.isFinite(coordsNext[0]) ||
+        !Number.isFinite(coordsNext[1])
+      ) {
+        continue;
+      }
+
+      const speedValues = [];
+      if (Number.isFinite(current.speed_2d_m_s)) speedValues.push(Number(current.speed_2d_m_s));
+      if (Number.isFinite(next.speed_2d_m_s)) speedValues.push(Number(next.speed_2d_m_s));
+      const avgSpeedMs =
+        speedValues.length > 0
+          ? speedValues.reduce((acc, value) => acc + value, 0) / speedValues.length
+          : null;
+      const avgSpeedKmh = avgSpeedMs !== null ? avgSpeedMs * 3.6 : null;
+
+      segments.push({
+        type: 'Feature',
+        id: `${tripId}-segment-${i}`,
+        geometry: {
+          type: 'LineString',
+          coordinates: [coordsCurrent, coordsNext]
+        },
+        properties: {
+          trip_id: tripId,
+          start_image: current.image,
+          end_image: next.image,
+          speed_kmh: avgSpeedKmh,
+          color
+        }
+      });
+    }
+
+    trip.segmentFeatures = segments;
+    return segments;
+  }
+
+  function mapTripToPoints(trip) {
+    if (!trip) return [];
+    if (Array.isArray(trip.pointFeatures)) {
+      return trip.pointFeatures;
+    }
+
+    const tripId = trip?.id ?? '';
+    const color = trip?.color ?? tripSummaryMap.get(tripId)?.color ?? '';
+    const validRecords = Array.isArray(trip.records)
+      ? trip.records.filter(
+          (record) =>
+            Number.isFinite(record?.latitude) && Number.isFinite(record?.longitude)
+        )
+      : [];
+
+    const features = validRecords.map((record, index) => {
+      const imageUrl = resolveImageUrl(record.image);
+      const speedMs = Number.isFinite(record.speed_2d_m_s)
+        ? Number(record.speed_2d_m_s)
+        : null;
+      const speedKmh = speedMs !== null ? speedMs * 3.6 : null;
+      return {
+        type: 'Feature',
+        id: `${tripId}-${index}`,
+        geometry: {
+          type: 'Point',
+          coordinates: [record.longitude, record.latitude]
+        },
+        properties: {
+          trip_id: tripId,
+          video: trip?.video ?? '',
+          image: record.image,
+          image_url: imageUrl,
+          timestamp: record.timestamp,
+          altitude_m: record.altitude_m,
+          speed_2d_m_s: record.speed_2d_m_s,
+          speed_3d_m_s: record.speed_3d_m_s,
+          gps_fix: record.gps_fix,
+          precision_m: record.precision_m,
+          speed_kmh: speedKmh,
+          color
+        }
+      };
+    });
+
+    trip.pointFeatures = features;
+    return features;
+  }
+
+  function uniqueTripEntries(features) {
+    const entries = [];
+    const seen = new Set();
+
+    for (const feature of features) {
+      const tripId = feature.properties?.trip_id;
+      if (!tripId || seen.has(tripId)) continue;
+      seen.add(tripId);
+      const summary = tripSummaryMap.get(tripId);
+      entries.push({
+        tripId,
+        label: summary?.label ?? tripId
+      });
+    }
+
+    return entries;
+  }
+
+  const tripEntries = Object.entries(tripModules)
+    .map(([path, loader]) => {
       const fileName = path.split('/').pop();
       const id = fileName?.replace('_gps.json', '') ?? path;
-      const data = module?.default ?? module;
-
-      return {
-        id,
-        fileName,
-        label: data?.video?.replace(/\.MP4$/i, '') ?? id,
-        video: data?.video ?? id,
-        snapshotInterval: data?.snapshot_interval ?? null,
-        recordCount: data?.record_count ?? data?.records?.length ?? 0,
-        records: Array.isArray(data?.records) ? data.records : []
-      };
+      return { id, fileName, loader };
     })
-    .filter((trip) => trip.records.length > 0)
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
-  const totalTrips = tripData.length;
-  const totalSnapshots = tripData.reduce((sum, trip) => sum + trip.records.length, 0);
-  const averageSnapshots = totalTrips > 0 ? totalSnapshots / totalTrips : 0;
+  tripEntries.forEach((entry, index) => {
+    entry.color = `hsl(${(index * 53) % 360}deg 80% 45%)`;
+  });
+
+  const tripLoaders = new Map(tripEntries.map((entry) => [entry.id, entry.loader]));
+  const baseTripMeta = new Map(
+    tripEntries.map((entry) => [entry.id, { fileName: entry.fileName, color: entry.color }])
+  );
+
+  let tripSummaries = tripEntries.map((entry) => ({
+    id: entry.id,
+    fileName: entry.fileName,
+    color: entry.color,
+    label: entry.id,
+    video: '',
+    snapshotInterval: null,
+    recordCount: 0,
+    loaded: false,
+    loadError: null
+  }));
+
+  const tripCache = new Map();
+  const tripPromises = new Map();
+  let allTripsLoaded = false;
+  let loadAllPromise = null;
+
+  $: totalTrips = tripSummaries.length;
+  $: totalSnapshots = tripSummaries.reduce((sum, trip) => sum + (trip.recordCount ?? 0), 0);
+  $: averageSnapshots = totalTrips > 0 ? totalSnapshots / totalTrips : 0;
 
   let mapContainer;
   let map;
   let mapLoaded = false;
-  let selectedTrip = tripData[0]?.id ?? '';
+  let selectedTrip = tripSummaries[0]?.id ?? '';
   let mapError = '';
   let lastLoggedTripId = '';
   let hoverPopup;
+  let segmentHoverPopup;
+  let segmentPopupPinned = false;
   let selectedRecord = null;
   let selectedSpeedKmh = null;
   let selectedSpeed3dKmh = null;
-  let viewMode = 'single';
+  let viewMode = 'all';
+  let highlightedTripId = '';
+  let tripCacheVersion = 0;
+  let allTripsBoundsNeedsUpdate = true;
 
-  $: currentTrip = tripData.find((trip) => trip.id === selectedTrip);
+  $: tripSummaryMap = new Map(tripSummaries.map((summary) => [summary.id, summary]));
+  $: currentTrip = tripCache.get(selectedTrip) ?? null;
+  $: selectedTripSummary = tripSummaryMap.get(selectedTrip);
+  $: if (!selectedTrip && tripSummaries.length) {
+    selectedTrip = tripSummaries[0].id;
+  }
   $: if (selectedTrip) {
     console.log(`Selected trip changed to: ${selectedTrip}`);
   }
@@ -89,6 +241,17 @@
   }
   $: if (viewMode !== 'single') {
     selectedRecord = null;
+  }
+  $: if (viewMode === 'single' && segmentHoverPopup) {
+    segmentPopupPinned = false;
+    segmentHoverPopup.remove();
+    segmentHoverPopup = null;
+    if (map) {
+      const canvas = map.getCanvas();
+      if (canvas?.style) {
+        canvas.style.cursor = '';
+      }
+    }
   }
 
   $: isSingleMode = viewMode === 'single';
@@ -108,6 +271,133 @@
   const mapStyleUrl = maptilerKey
     ? `https://api.maptiler.com/maps/base-v4/style.json?key=${maptilerKey}`
     : null;
+
+  const defaultLineWidthExpr = ['interpolate', ['linear'], ['zoom'], 8, 2, 14, 6];
+  const subduedLineWidthExpr = ['interpolate', ['linear'], ['zoom'], 8, 1.5, 14, 4.5];
+  const highlightLineWidthExpr = ['interpolate', ['linear'], ['zoom'], 8, 3.2, 14, 8.5];
+
+  function processTripData(id, raw) {
+    const summary = tripSummaryMap.get(id) ?? baseTripMeta.get(id) ?? { fileName: id, color: '' };
+    const records = Array.isArray(raw?.records) ? raw.records : [];
+
+    return {
+      id,
+      fileName: summary.fileName,
+      color: summary.color,
+      label: raw?.video?.replace(/\.MP4$/i, '') ?? id,
+      video: raw?.video ?? id,
+      snapshotInterval: raw?.snapshot_interval ?? null,
+      recordCount: raw?.record_count ?? records.length,
+      records
+    };
+  }
+
+  async function ensureTripLoaded(tripId) {
+    if (!tripId) return null;
+    if (tripCache.has(tripId)) {
+      return tripCache.get(tripId);
+    }
+
+    if (!tripPromises.has(tripId)) {
+      const loader = tripLoaders.get(tripId);
+      if (!loader) {
+        console.warn('No loader for trip', tripId);
+        return null;
+      }
+
+      const promise = loader()
+        .then((raw) => {
+          const processed = processTripData(tripId, raw);
+          mapTripToSegments(processed);
+          tripCache.set(tripId, processed);
+          tripCacheVersion += 1;
+          tripSummaries = tripSummaries.map((summary) =>
+            summary.id === tripId
+              ? {
+                  ...summary,
+                  label: processed.label,
+                  video: processed.video,
+                  snapshotInterval: processed.snapshotInterval,
+                  recordCount: processed.recordCount,
+                  loaded: true,
+                  loadError: null
+                }
+              : summary
+          );
+          tripPromises.delete(tripId);
+          return processed;
+        })
+        .catch((error) => {
+          console.error('Failed to load trip', tripId, error);
+          tripSummaries = tripSummaries.map((summary) =>
+            summary.id === tripId
+              ? {
+                  ...summary,
+                  loaded: false,
+                  loadError: error instanceof Error ? error.message : 'Failed to load trip'
+                }
+              : summary
+          );
+          tripPromises.delete(tripId);
+          return null;
+        });
+
+      tripPromises.set(tripId, promise);
+    }
+
+    return tripPromises.get(tripId);
+  }
+
+  function setHighlightedTrip(tripId) {
+    const nextId = tripId ?? '';
+    if (highlightedTripId === nextId) return;
+    highlightedTripId = nextId;
+    updateSegmentHighlightVisuals();
+  }
+
+  function updateSegmentHighlightVisuals() {
+    if (!map || !mapLoaded || !map.getLayer('trip-segments-line')) {
+      return;
+    }
+
+    const highlightActive = Boolean(highlightedTripId);
+
+    const baseColorExpr = highlightActive
+      ? [
+          'case',
+          ['==', ['get', 'trip_id'], highlightedTripId],
+          ['case', ['has', 'color'], ['to-color', ['get', 'color']], '#0ea5e9'],
+          '#334155'
+        ]
+      : ['case', ['has', 'color'], ['to-color', ['get', 'color']], speedColorExpression()];
+
+    const baseWidthExpr = highlightActive ? subduedLineWidthExpr : defaultLineWidthExpr;
+    const baseOpacityExpr = highlightActive
+      ? ['case', ['==', ['get', 'trip_id'], highlightedTripId], 0.95, 1]
+      : 0.75;
+
+    map.setPaintProperty('trip-segments-line', 'line-color', baseColorExpr);
+    map.setPaintProperty('trip-segments-line', 'line-width', baseWidthExpr);
+    map.setPaintProperty('trip-segments-line', 'line-opacity', baseOpacityExpr);
+
+    if (map.getLayer('trip-segments-highlight')) {
+      if (highlightActive) {
+        map.setFilter('trip-segments-highlight', ['==', ['get', 'trip_id'], highlightedTripId]);
+        map.setPaintProperty('trip-segments-highlight', 'line-color', [
+          'case',
+          ['has', 'color'],
+          ['to-color', ['get', 'color']],
+          '#0284c7'
+        ]);
+        map.setPaintProperty('trip-segments-highlight', 'line-width', highlightLineWidthExpr);
+        map.setPaintProperty('trip-segments-highlight', 'line-opacity', 1);
+        map.moveLayer('trip-segments-highlight', 'trip-points-fill');
+      } else {
+        map.setFilter('trip-segments-highlight', ['==', ['get', 'trip_id'], '__none__']);
+        map.setPaintProperty('trip-segments-line', 'line-width', defaultLineWidthExpr);
+      }
+    }
+  }
 
   onMount(() => {
     if (!mapStyleUrl) {
@@ -157,7 +447,7 @@
               14,
               6
             ],
-            'line-color': speedColorExpression(),
+            'line-color': ['case', ['has', 'color'], ['to-color', ['get', 'color']], speedColorExpression()],
             'line-opacity': 0.75
           }
         });
@@ -182,12 +472,33 @@
           }
         });
 
+        map.addLayer({
+          id: 'trip-segments-highlight',
+          type: 'line',
+          source: 'trip-segments',
+          filter: ['==', ['get', 'trip_id'], '__none__'],
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          paint: {
+            'line-color': ['case', ['has', 'color'], ['to-color', ['get', 'color']], '#0284c7'],
+            'line-width': highlightLineWidthExpr,
+            'line-opacity': 1
+          }
+        });
+        map.moveLayer('trip-segments-highlight', 'trip-points-fill');
+
         map.on('mousemove', 'trip-points-fill', handlePointHover);
         map.on('mouseleave', 'trip-points-fill', handlePointLeave);
         map.on('click', 'trip-points-fill', handlePointClick);
+        map.on('mousemove', handleSegmentHover);
+        map.on('click', handleMapClick);
+        map.getCanvas().addEventListener('mouseleave', handleSegmentLeave);
       }
 
       updateTripPoints();
+      updateSegmentHighlightVisuals();
     });
 
     map.on('error', (event) => {
@@ -203,11 +514,18 @@
         hoverPopup.remove();
         hoverPopup = null;
       }
+      if (segmentHoverPopup) {
+        segmentHoverPopup.remove();
+        segmentHoverPopup = null;
+      }
 
       if (map) {
         map.off('mousemove', 'trip-points-fill', handlePointHover);
         map.off('mouseleave', 'trip-points-fill', handlePointLeave);
         map.off('click', 'trip-points-fill', handlePointClick);
+        map.off('mousemove', handleSegmentHover);
+        map.off('click', handleMapClick);
+        map.getCanvas().removeEventListener('mouseleave', handleSegmentLeave);
         map.remove();
       }
 
@@ -224,6 +542,53 @@
       });
     }
     return hoverPopup;
+  }
+
+  function ensureSegmentPopup() {
+    if (!segmentHoverPopup) {
+      segmentHoverPopup = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        maxWidth: '360px'
+      });
+    }
+    return segmentHoverPopup;
+  }
+
+  function segmentTooltipHtml(entries, { pinned = false } = {}) {
+    if (!entries.length) return '';
+
+    const heading = pinned ? 'Select a trip to inspect' : 'Nearby routes';
+
+    const listItems = entries
+      .map((entry) => {
+        const label = escapeHtml(entry.label);
+        const tripIdAttr = escapeHtml(entry.tripId);
+
+        if (pinned) {
+          return `
+            <li style="margin:0;padding:0;border-bottom:1px solid rgba(148,163,184,0.2);">
+              <button data-trip-id="${tripIdAttr}" style="display:block;width:100%;padding:8px 10px;text-align:left;border:none;background:none;cursor:pointer;border-radius:6px;font-size:13px;font-weight:600;color:#0f172a;transition:background-color 0.15s ease,color 0.15s ease;">
+                ${label}
+              </button>
+            </li>
+          `;
+        }
+
+        return `
+          <li style="margin:0;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+            <div style="font-size:13px;font-weight:600;color:#0f172a;">${label}</div>
+          </li>
+        `;
+      })
+      .join('');
+
+    return `
+      <div style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+        <div style="font-size:12px;font-weight:600;color:${pinned ? '#0f172a' : '#0369a1'};margin-bottom:6px;">${heading}</div>
+        <ul style="margin:0;padding:0;list-style:none;">${listItems}</ul>
+      </div>
+    `;
   }
 
   function featureTooltipHtml({ imageUrl, imageName, timestamp, speedKmh }) {
@@ -291,6 +656,214 @@
     }
     if (hoverPopup) {
       hoverPopup.remove();
+      hoverPopup = null;
+    }
+  }
+
+  const SEGMENT_HIT_RADIUS = 6;
+
+  function querySegmentsNearPoint(point) {
+    if (!map) return [];
+    const tolerance = SEGMENT_HIT_RADIUS;
+    const bbox = [
+      [point.x - tolerance, point.y - tolerance],
+      [point.x + tolerance, point.y + tolerance]
+    ];
+
+    return map.queryRenderedFeatures(bbox, {
+      layers: ['trip-segments-line']
+    });
+  }
+
+  function flyToFeatureCollection(
+    features,
+    { maxZoom = 16, padding = 72, bufferRatio = 0, duration = 600 } = {}
+  ) {
+    if (!map || !features?.length) return;
+
+    let minLng = Infinity;
+    let minLat = Infinity;
+    let maxLng = -Infinity;
+    let maxLat = -Infinity;
+
+    for (const feature of features) {
+      const geometry = feature.geometry;
+      if (geometry?.type === 'LineString') {
+        for (const [lng, lat] of geometry.coordinates) {
+          if (Number.isFinite(lng) && Number.isFinite(lat)) {
+            minLng = Math.min(minLng, lng);
+            minLat = Math.min(minLat, lat);
+            maxLng = Math.max(maxLng, lng);
+            maxLat = Math.max(maxLat, lat);
+          }
+        }
+      } else if (geometry?.type === 'Point') {
+        const [lng, lat] = geometry.coordinates;
+        if (Number.isFinite(lng) && Number.isFinite(lat)) {
+          minLng = Math.min(minLng, lng);
+          minLat = Math.min(minLat, lat);
+          maxLng = Math.max(maxLng, lng);
+          maxLat = Math.max(maxLat, lat);
+        }
+      }
+    }
+
+    if (
+      Number.isFinite(minLng) &&
+      Number.isFinite(minLat) &&
+      Number.isFinite(maxLng) &&
+      Number.isFinite(maxLat)
+    ) {
+      if (bufferRatio > 0) {
+        const lngSpan = maxLng - minLng;
+        const latSpan = maxLat - minLat;
+        const lngPadding = lngSpan > 0 ? lngSpan * bufferRatio : 0.0005;
+        const latPadding = latSpan > 0 ? latSpan * bufferRatio : 0.0005;
+        minLng -= lngPadding;
+        maxLng += lngPadding;
+        minLat -= latPadding;
+        maxLat += latPadding;
+      }
+
+      map.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat]
+        ],
+        { padding, duration, maxZoom }
+      );
+    }
+  }
+
+  function handleSegmentHover(event) {
+    if (!map || viewMode === 'single' || segmentPopupPinned) return;
+
+    const features = querySegmentsNearPoint(event.point);
+    if (!features.length) {
+      handleSegmentLeave();
+      return;
+    }
+
+    const entries = uniqueTripEntries(features);
+    if (!entries.length) {
+      handleSegmentLeave();
+      return;
+    }
+
+    map.getCanvas().style.cursor = 'pointer';
+    setHighlightedTrip(entries[0]?.tripId ?? '');
+    showSegmentPopup(entries, event.lngLat, { pinned: false });
+  }
+
+  function handleSegmentLeave() {
+    if (map && !segmentPopupPinned) {
+      map.getCanvas().style.cursor = '';
+    }
+    if (!segmentPopupPinned && segmentHoverPopup) {
+      segmentHoverPopup.remove();
+      segmentHoverPopup = null;
+    }
+    if (!segmentPopupPinned) {
+      setHighlightedTrip('');
+    }
+  }
+
+  async function handleMapClick(event) {
+    if (!map) return;
+
+    if (viewMode !== 'single') {
+      const features = querySegmentsNearPoint(event.point);
+
+      if (features.length) {
+        const entries = uniqueTripEntries(features);
+        if (entries.length) {
+          const primaryTripId = entries[0]?.tripId ?? '';
+          map.getCanvas().style.cursor = 'pointer';
+          setHighlightedTrip(primaryTripId);
+          showSegmentPopup(entries, event.lngLat, { pinned: true });
+          const relevantTripIds = entries.map((entry) => entry.tripId).filter(Boolean);
+          const trips = await Promise.all(
+            relevantTripIds.map(async (tripId) => {
+              const loaded = (await ensureTripLoaded(tripId)) ?? tripCache.get(tripId);
+              return loaded ?? null;
+            })
+          );
+          const combinedSegments = trips
+            .filter(Boolean)
+            .flatMap((trip) => mapTripToSegments(trip));
+
+          if (combinedSegments.length) {
+            flyToFeatureCollection(combinedSegments, {
+              maxZoom: 15,
+              padding: 96,
+              bufferRatio: 0.08
+            });
+          }
+          return;
+        }
+      }
+    }
+
+    if (segmentPopupPinned) {
+      segmentPopupPinned = false;
+      if (segmentHoverPopup) {
+        segmentHoverPopup.remove();
+        segmentHoverPopup = null;
+      }
+      map.getCanvas().style.cursor = '';
+      setHighlightedTrip('');
+    }
+  }
+
+  function showSegmentPopup(entries, lngLat, { pinned = false } = {}) {
+    const popup = ensureSegmentPopup();
+    segmentHoverPopup = popup;
+    segmentPopupPinned = !!pinned;
+
+    popup
+      .setLngLat(lngLat)
+      .setHTML(segmentTooltipHtml(entries, { pinned }))
+      .addTo(map);
+
+    if (pinned) {
+      const root = popup.getElement();
+      const buttons = root.querySelectorAll('[data-trip-id]');
+      buttons.forEach((button) => {
+        button.addEventListener('click', async (clickEvent) => {
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          const tripId = button.getAttribute('data-trip-id');
+          if (!tripId) return;
+
+          segmentPopupPinned = false;
+          if (segmentHoverPopup) {
+            segmentHoverPopup.remove();
+            segmentHoverPopup = null;
+          }
+          viewMode = 'single';
+          selectedTrip = tripId;
+          const trip = (await ensureTripLoaded(tripId)) ?? tripCache.get(tripId);
+          if (trip) {
+            const tripSegments = mapTripToSegments(trip);
+            if (tripSegments.length) {
+              flyToFeatureCollection(tripSegments, { maxZoom: 15 });
+            }
+          }
+        });
+
+        button.addEventListener('mouseenter', () => {
+          const tripId = button.getAttribute('data-trip-id');
+          button.style.backgroundColor = 'rgba(14, 165, 233, 0.14)';
+          button.style.color = '#0f172a';
+          setHighlightedTrip(tripId ?? '');
+        });
+
+        button.addEventListener('mouseleave', () => {
+          button.style.backgroundColor = 'transparent';
+          button.style.color = '#0f172a';
+          setHighlightedTrip('');
+        });
+      });
     }
   }
 
@@ -351,12 +924,16 @@
     console.log(`${message}: ${label}`);
   }
 
-  function updateTripPoints(trip = currentTrip) {
+  async function updateTripPoints() {
     if (!map || !mapLoaded) {
       return;
     }
 
     handlePointLeave();
+
+    if (viewMode === 'single') {
+      setHighlightedTrip('');
+    }
 
     const pointSource = map.getSource('trip-points');
     const segmentSource = map.getSource('trip-segments');
@@ -372,12 +949,71 @@
     const emptyCollection = { type: 'FeatureCollection', features: [] };
 
     if (viewMode !== 'single') {
+      const loadedTrips = [];
+      const pendingPromises = [];
+
+      for (const summary of tripSummaries) {
+        const cachedTrip = tripCache.get(summary.id);
+        if (cachedTrip) {
+          loadedTrips.push(cachedTrip);
+        } else {
+          pendingPromises.push(ensureTripLoaded(summary.id));
+        }
+      }
+
+      const hasPendingLoads = pendingPromises.length > 0;
+
+      if (hasPendingLoads) {
+        allTripsLoaded = false;
+        if (!loadAllPromise) {
+          loadAllPromise = Promise.all(pendingPromises)
+            .then(() => {
+              allTripsLoaded = true;
+              allTripsBoundsNeedsUpdate = true;
+            })
+            .catch((error) => {
+              console.error('Failed to load all trips', error);
+            })
+            .finally(() => {
+              loadAllPromise = null;
+            });
+        }
+      } else {
+        allTripsLoaded = true;
+        loadAllPromise = null;
+      }
+
       pointSource.setData(emptyCollection);
-      segmentSource.setData(emptyCollection);
+
+      const allSegments = loadedTrips.flatMap((trip) => mapTripToSegments(trip));
+
+      segmentSource.setData({
+        type: 'FeatureCollection',
+        features: allSegments
+      });
       lastLoggedTripId = '';
-      console.log('All trips view is not yet implemented.');
+      setHighlightedTrip('');
+
+      if (allSegments.length && allTripsBoundsNeedsUpdate) {
+        flyToFeatureCollection(allSegments, {
+          padding: 64,
+          duration: 700,
+          maxZoom: 14,
+          bufferRatio: 0.05
+        });
+        if (!hasPendingLoads) {
+          allTripsBoundsNeedsUpdate = false;
+        }
+      }
+
+      console.log(
+        `All trips view: ${allSegments.length} segments rendered (loaded ${loadedTrips.length}/${tripSummaries.length})`
+      );
+      updateSegmentHighlightVisuals();
       return;
     }
+
+    const trip = await ensureTripLoaded(selectedTrip);
 
     if (trip && trip.id !== lastLoggedTripId) {
       logTripStatus('Loading trip', trip);
@@ -391,79 +1027,11 @@
       return;
     }
 
-    const validRecords = trip.records.filter(
-      (record) =>
-        Number.isFinite(record?.latitude) && Number.isFinite(record?.longitude)
-    );
+    mapTripToPoints(trip);
+    mapTripToSegments(trip);
 
-    const pointFeatures = validRecords.map((record, index) => {
-      const imageUrl = resolveImageUrl(record.image);
-      const speedMs = Number.isFinite(record.speed_2d_m_s)
-        ? Number(record.speed_2d_m_s)
-        : null;
-      const speedKmh = speedMs !== null ? speedMs * 3.6 : null;
-      return {
-        type: 'Feature',
-        id: `${trip?.id ?? 'trip'}-${index}`,
-        geometry: {
-          type: 'Point',
-          coordinates: [record.longitude, record.latitude]
-        },
-        properties: {
-          trip_id: trip?.id ?? '',
-          video: trip?.video ?? '',
-          image: record.image,
-          image_url: imageUrl,
-          timestamp: record.timestamp,
-          altitude_m: record.altitude_m,
-          speed_2d_m_s: record.speed_2d_m_s,
-          speed_3d_m_s: record.speed_3d_m_s,
-          gps_fix: record.gps_fix,
-          precision_m: record.precision_m,
-          speed_kmh: speedKmh
-        }
-      };
-    });
-
-    const segmentFeatures = [];
-    for (let i = 0; i < validRecords.length - 1; i += 1) {
-      const current = validRecords[i];
-      const next = validRecords[i + 1];
-      const coordsCurrent = [Number(current.longitude), Number(current.latitude)];
-      const coordsNext = [Number(next.longitude), Number(next.latitude)];
-      if (
-        !Number.isFinite(coordsCurrent[0]) ||
-        !Number.isFinite(coordsCurrent[1]) ||
-        !Number.isFinite(coordsNext[0]) ||
-        !Number.isFinite(coordsNext[1])
-      ) {
-        continue;
-      }
-
-      const speedValues = [];
-      if (Number.isFinite(current.speed_2d_m_s)) speedValues.push(Number(current.speed_2d_m_s));
-      if (Number.isFinite(next.speed_2d_m_s)) speedValues.push(Number(next.speed_2d_m_s));
-      const avgSpeedMs =
-        speedValues.length > 0
-          ? speedValues.reduce((acc, value) => acc + value, 0) / speedValues.length
-          : null;
-      const avgSpeedKmh = avgSpeedMs !== null ? avgSpeedMs * 3.6 : null;
-
-      segmentFeatures.push({
-        type: 'Feature',
-        id: `${trip?.id ?? 'trip'}-segment-${i}`,
-        geometry: {
-          type: 'LineString',
-          coordinates: [coordsCurrent, coordsNext]
-        },
-        properties: {
-          trip_id: trip?.id ?? '',
-          start_image: current.image,
-          end_image: next.image,
-          speed_kmh: avgSpeedKmh
-        }
-      });
-    }
+    const pointFeatures = trip.pointFeatures ?? [];
+    const segmentFeatures = trip.segmentFeatures ?? [];
 
     pointSource.setData({
       type: 'FeatureCollection',
@@ -515,10 +1083,16 @@
     } else {
       logTripStatus('Trip has no valid GPS points', trip);
     }
+
+    updateSegmentHighlightVisuals();
   }
 
   $: if (mapLoaded) {
-    updateTripPoints(isSingleMode ? currentTrip : null);
+    void selectedTrip;
+    void viewMode;
+    void tripSummaries;
+    void tripCacheVersion;
+    updateTripPoints();
   }
 </script>
 
@@ -526,7 +1100,7 @@
   <aside class="w-72 shrink-0 border-r border-slate-200 bg-slate-50 p-4">
     <h1 class="text-lg font-semibold text-slate-900">Initial Dataset Exploration</h1>
 
-    {#if tripData.length > 0}
+    {#if tripSummaries.length > 0}
       <div class="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm">
         <div class="flex items-center justify-between">
           <span class="text-slate-500">Total trips</span>
@@ -553,7 +1127,15 @@
                 ? 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm'
                 : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900')
             }
-            on:click={() => (viewMode = 'single')}
+            on:click={() => {
+              viewMode = 'single';
+              segmentPopupPinned = false;
+              if (segmentHoverPopup) {
+                segmentHoverPopup.remove();
+                segmentHoverPopup = null;
+              }
+              setHighlightedTrip('');
+            }}
           >
             Single trip
           </button>
@@ -565,14 +1147,23 @@
                 ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
                 : 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm')
             }
-            on:click={() => (viewMode = 'all')}
+            on:click={() => {
+              viewMode = 'all';
+              allTripsBoundsNeedsUpdate = true;
+              segmentPopupPinned = false;
+              if (segmentHoverPopup) {
+                segmentHoverPopup.remove();
+                segmentHoverPopup = null;
+              }
+              setHighlightedTrip('');
+            }}
           >
             All trips
           </button>
         </div>
         {#if !isSingleMode}
           <p class="mt-3 text-sm text-slate-500">
-            All trips visualization is coming soon.
+            Showing all trip segments together (points hidden).
           </p>
         {/if}
       </div>
@@ -591,7 +1182,7 @@
             bind:value={selectedTrip}
             class="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
           >
-            {#each tripData as trip}
+            {#each tripSummaries as trip}
               <option value={trip.id}>{trip.label}</option>
             {/each}
           </select>
@@ -599,13 +1190,13 @@
           <dl class="mt-6 space-y-2 text-sm text-slate-600">
             <div class="flex items-center justify-between">
               <dt>Snapshots</dt>
-              <dd class="font-medium text-slate-900">{currentTrip?.recordCount ?? 0}</dd>
+              <dd class="font-medium text-slate-900">{selectedTripSummary?.recordCount ?? 0}</dd>
             </div>
-            {#if currentTrip?.snapshotInterval}
+            {#if selectedTripSummary?.snapshotInterval}
               <div class="flex items-center justify-between">
                 <dt>Interval (s)</dt>
                 <dd class="font-medium text-slate-900">
-                  {currentTrip.snapshotInterval}
+                  {selectedTripSummary.snapshotInterval}
                 </dd>
               </div>
             {/if}
