@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.app.json",
+  "include": [
+    "src/**/*",
+    "vite.config.js",
+    "svelte.config.js"
+  ],
+  "exclude": ["node_modules/**"]
+}
