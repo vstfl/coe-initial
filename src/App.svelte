@@ -2,6 +2,17 @@
   import { onMount } from 'svelte';
   import maplibregl from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
+  import frictionManifest from './lib/friction-manifest.json';
+
+  const frictionTripCounts = new Map(
+    Object.entries(frictionManifest ?? {}).map(([tripId, count]) => [tripId, Number(count) || 0])
+  );
+
+  function formatTripLabel(tripId, baseLabel) {
+    const label = baseLabel && String(baseLabel).trim().length ? String(baseLabel).trim() : tripId;
+    const count = Number(frictionTripCounts.get(tripId)) || 0;
+    return count > 0 ? `${label} (F-${count})` : label;
+  }
 
   const tripModules = import.meta.glob('../snapshots/*_gps.json', {
     import: 'default'
@@ -176,7 +187,8 @@
     .map(([path, loader]) => {
       const fileName = path.split('/').pop();
       const id = fileName?.replace('_gps.json', '') ?? path;
-      return { id, fileName, loader };
+      const frictionTestCount = Number(frictionTripCounts.get(id)) || 0;
+      return { id, fileName, loader, frictionTestCount };
     })
     .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
 
@@ -186,17 +198,22 @@
 
   const tripLoaders = new Map(tripEntries.map((entry) => [entry.id, entry.loader]));
   const baseTripMeta = new Map(
-    tripEntries.map((entry) => [entry.id, { fileName: entry.fileName, color: entry.color }])
+    tripEntries.map((entry) => [
+      entry.id,
+      { fileName: entry.fileName, color: entry.color, frictionTestCount: entry.frictionTestCount }
+    ])
   );
 
   let tripSummaries = tripEntries.map((entry) => ({
     id: entry.id,
     fileName: entry.fileName,
     color: entry.color,
-    label: entry.id,
+    rawLabel: entry.id,
+    label: formatTripLabel(entry.id, entry.id),
     video: '',
     snapshotInterval: null,
     recordCount: 0,
+    frictionTestCount: entry.frictionTestCount,
     loaded: false,
     loadError: null
   }));
@@ -208,6 +225,10 @@
 
   $: totalTrips = tripSummaries.length;
   $: totalSnapshots = tripSummaries.reduce((sum, trip) => sum + (trip.recordCount ?? 0), 0);
+  $: totalFrictionTests = tripSummaries.reduce(
+    (sum, trip) => sum + (Number(trip.frictionTestCount) || 0),
+    0
+  );
   $: averageSnapshots = totalTrips > 0 ? totalSnapshots / totalTrips : 0;
 
   let mapContainer;
@@ -277,14 +298,26 @@
   const highlightLineWidthExpr = ['interpolate', ['linear'], ['zoom'], 8, 3.2, 14, 8.5];
 
   function processTripData(id, raw) {
-    const summary = tripSummaryMap.get(id) ?? baseTripMeta.get(id) ?? { fileName: id, color: '' };
+    const summary =
+      tripSummaryMap.get(id) ??
+      baseTripMeta.get(id) ??
+      {
+        fileName: id,
+        color: '',
+        frictionTestCount: Number(frictionTripCounts.get(id)) || 0
+      };
     const records = Array.isArray(raw?.records) ? raw.records : [];
+    const baseLabel = raw?.video?.replace(/\.MP4$/i, '') ?? id;
+    const frictionTestCount =
+      Number(summary?.frictionTestCount ?? frictionTripCounts.get(id)) || 0;
 
     return {
       id,
       fileName: summary.fileName,
       color: summary.color,
-      label: raw?.video?.replace(/\.MP4$/i, '') ?? id,
+      frictionTestCount,
+      label: baseLabel,
+      rawLabel: baseLabel,
       video: raw?.video ?? id,
       snapshotInterval: raw?.snapshot_interval ?? null,
       recordCount: raw?.record_count ?? records.length,
@@ -308,6 +341,10 @@
       const promise = loader()
         .then((raw) => {
           const processed = processTripData(tripId, raw);
+          const baseLabel = processed.label ?? tripId;
+          const frictionTestCount = Number(frictionTripCounts.get(tripId)) || 0;
+          processed.frictionTestCount = frictionTestCount;
+          processed.rawLabel = baseLabel;
           mapTripToSegments(processed);
           tripCache.set(tripId, processed);
           tripCacheVersion += 1;
@@ -315,10 +352,12 @@
             summary.id === tripId
               ? {
                   ...summary,
-                  label: processed.label,
+                  rawLabel: baseLabel,
+                  label: formatTripLabel(tripId, baseLabel),
                   video: processed.video,
                   snapshotInterval: processed.snapshotInterval,
                   recordCount: processed.recordCount,
+                  frictionTestCount,
                   loaded: true,
                   loadError: null
                 }
@@ -1111,6 +1150,10 @@
           <span class="font-semibold text-slate-900">{totalSnapshots}</span>
         </div>
         <div class="flex items-center justify-between">
+          <span class="text-slate-500">Total friction tests</span>
+          <span class="font-semibold text-slate-900">{totalFrictionTests}</span>
+        </div>
+        <div class="flex items-center justify-between">
           <span class="text-slate-500">Avg snapshots / trip</span>
           <span class="font-semibold text-slate-900">{averageSnapshots.toFixed(1)}</span>
         </div>
@@ -1191,6 +1234,12 @@
             <div class="flex items-center justify-between">
               <dt>Snapshots</dt>
               <dd class="font-medium text-slate-900">{selectedTripSummary?.recordCount ?? 0}</dd>
+            </div>
+            <div class="flex items-center justify-between">
+              <dt>Friction tests</dt>
+              <dd class="font-medium text-slate-900">
+                {selectedTripSummary?.frictionTestCount ?? 0}
+              </dd>
             </div>
             {#if selectedTripSummary?.snapshotInterval}
               <div class="flex items-center justify-between">

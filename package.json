@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/build-friction-manifest.mjs",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig tsconfig.json"
+    "check": "svelte-check --tsconfig tsconfig.json",
+    "friction:manifest": "node scripts/build-friction-manifest.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^3.1.1",
