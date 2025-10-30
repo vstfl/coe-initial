@@ -3,6 +3,7 @@
   import maplibregl from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
   import frictionManifest from './lib/friction-manifest.json';
+  import trafficCamerasRaw from '../other_data/traffic_cameras_v2.json';
 
   const frictionTripCounts = new Map(
     Object.entries(frictionManifest ?? {}).map(([tripId, count]) => [tripId, Number(count) || 0])
@@ -42,6 +43,76 @@
   function isFiniteNumber(value) {
     return typeof value === 'number' && Number.isFinite(value);
   }
+
+  function parseCoordinate(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+
+  const selectedTrafficCameraMetadata = new Map(
+    [
+      ['Whitemud Drive|122 Street', { priority: 'Priority #1' }],
+      ['Whitemud Drive|159 Street', { priority: 'Priority #2' }],
+      ['Whitemud Drive|91 Street', { priority: 'Priority #3' }],
+      [
+        'Whitemud Drive|17 Street',
+        { priority: 'Priority #4', note: 'Note: Camera/stream appears to be broken at the moment' }
+      ]
+    ]
+  );
+
+  const trafficCameraFeatures = (Array.isArray(trafficCamerasRaw?.d) ? trafficCamerasRaw.d : [])
+    .map((camera) => {
+      const latitude = parseCoordinate(camera?.Latitude);
+      const longitude = parseCoordinate(camera?.Longitude);
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        return null;
+      }
+
+      const primaryRoad = camera?.PrimaryRoad ?? '';
+      const secondaryRoad = camera?.SecondaryRoad ?? '';
+      const selectionKey = `${String(primaryRoad).trim()}|${String(secondaryRoad).trim()}`;
+      const selectedMeta = selectedTrafficCameraMetadata.get(selectionKey);
+      const isSelected = Boolean(selectedMeta);
+
+      const featureId =
+        camera?.Code != null
+          ? `camera-${camera.Code}`
+          : camera?.StreamCode ?? camera?.StreamCodeMask ?? undefined;
+
+      return {
+        type: 'Feature',
+        id: featureId,
+        geometry: {
+          type: 'Point',
+          coordinates: [longitude, latitude]
+        },
+        properties: {
+          code: camera?.Code ?? null,
+          primaryRoad,
+          secondaryRoad,
+          selected: isSelected,
+          priorityLabel: selectedMeta?.priority ?? '',
+          priorityNote: selectedMeta?.note ?? '',
+          status: camera?.Status ?? '',
+          statusComment: camera?.StatusComment ?? ''
+        }
+      };
+    })
+    .filter(Boolean);
+
+  const trafficCameraCollection = {
+    type: 'FeatureCollection',
+    features: trafficCameraFeatures
+  };
+
+  const totalTrafficCameras = trafficCameraFeatures.length;
 
   function speedColorExpression() {
     return [
@@ -238,12 +309,15 @@
   let mapError = '';
   let lastLoggedTripId = '';
   let hoverPopup;
+  let trafficCameraPopup;
   let segmentHoverPopup;
   let segmentPopupPinned = false;
   let selectedRecord = null;
   let selectedSpeedKmh = null;
   let selectedSpeed3dKmh = null;
   let viewMode = 'all';
+  let showTripData = true;
+  let showTrafficCameras = true;
   let highlightedTripId = '';
   let tripCacheVersion = 0;
   let allTripsBoundsNeedsUpdate = true;
@@ -285,6 +359,43 @@
     selectedRecord && isFiniteNumber(selectedRecord.speed3d)
       ? selectedRecord.speed3d * 3.6
       : null;
+
+  $: if (map && mapLoaded && map.getLayer?.('traffic-cameras')) {
+    const visibility = showTrafficCameras ? 'visible' : 'none';
+    if (map.getLayoutProperty('traffic-cameras', 'visibility') !== visibility) {
+      map.setLayoutProperty('traffic-cameras', 'visibility', visibility);
+    }
+    if (!showTrafficCameras) {
+      handleTrafficCameraLeave();
+    }
+  }
+
+  $: if (map && mapLoaded) {
+    const tripLayerIds = ['trip-points-fill', 'trip-segments-line', 'trip-segments-highlight'];
+    const visibility = showTripData ? 'visible' : 'none';
+    for (const layerId of tripLayerIds) {
+      if (map.getLayer?.(layerId)) {
+        if (map.getLayoutProperty(layerId, 'visibility') !== visibility) {
+          map.setLayoutProperty(layerId, 'visibility', visibility);
+        }
+      }
+    }
+
+    if (!showTripData) {
+      handlePointLeave();
+      if (segmentHoverPopup) {
+        segmentHoverPopup.remove();
+        segmentHoverPopup = null;
+      }
+      segmentPopupPinned = false;
+      setHighlightedTrip('');
+      selectedRecord = null;
+    }
+  }
+
+  $: if (!showTripData && viewMode !== 'all') {
+    viewMode = 'all';
+  }
 
   const maptilerKey =
     import.meta.env.VITE_MAPTILER_API_KEY ?? import.meta.env.VITE_MAPTILER_KEY ?? '';
@@ -536,6 +647,50 @@
         map.getCanvas().addEventListener('mouseleave', handleSegmentLeave);
       }
 
+      if (!map.getSource('traffic-cameras')) {
+        map.addSource('traffic-cameras', {
+          type: 'geojson',
+          data: trafficCameraCollection
+        });
+      }
+
+      if (!map.getLayer('traffic-cameras')) {
+        const cameraRadiusExpr = [
+          'interpolate',
+          ['linear'],
+          ['zoom'],
+          8,
+          ['case', ['boolean', ['get', 'selected'], false], 3.75 * 1.5, 3.75],
+          14,
+          ['case', ['boolean', ['get', 'selected'], false], 9 * 1.5, 9]
+        ];
+        map.addLayer(
+          {
+            id: 'traffic-cameras',
+            type: 'circle',
+            source: 'traffic-cameras',
+            paint: {
+              'circle-radius': cameraRadiusExpr,
+              'circle-color': [
+                'case',
+                ['boolean', ['get', 'selected'], false],
+                '#16a34a',
+                '#f43f5e'
+              ],
+              'circle-stroke-color': '#ffffff',
+              'circle-stroke-width': 1.4,
+              'circle-opacity': 0.9
+            }
+          },
+          'trip-points-fill'
+        );
+      }
+
+      map.on('mousemove', 'traffic-cameras', handleTrafficCameraHover);
+      map.on('mouseleave', 'traffic-cameras', handleTrafficCameraLeave);
+      map.on('click', 'traffic-cameras', handleTrafficCameraClick);
+      map.getCanvas().addEventListener('mouseleave', handleTrafficCameraLeave);
+
       updateTripPoints();
       updateSegmentHighlightVisuals();
     });
@@ -553,6 +708,10 @@
         hoverPopup.remove();
         hoverPopup = null;
       }
+      if (trafficCameraPopup) {
+        trafficCameraPopup.remove();
+        trafficCameraPopup = null;
+      }
       if (segmentHoverPopup) {
         segmentHoverPopup.remove();
         segmentHoverPopup = null;
@@ -562,9 +721,13 @@
         map.off('mousemove', 'trip-points-fill', handlePointHover);
         map.off('mouseleave', 'trip-points-fill', handlePointLeave);
         map.off('click', 'trip-points-fill', handlePointClick);
+        map.off('mousemove', 'traffic-cameras', handleTrafficCameraHover);
+        map.off('mouseleave', 'traffic-cameras', handleTrafficCameraLeave);
+        map.off('click', 'traffic-cameras', handleTrafficCameraClick);
         map.off('mousemove', handleSegmentHover);
         map.off('click', handleMapClick);
         map.getCanvas().removeEventListener('mouseleave', handleSegmentLeave);
+        map.getCanvas().removeEventListener('mouseleave', handleTrafficCameraLeave);
         map.remove();
       }
 
@@ -648,6 +811,101 @@
         </div>
       </div>
     `;
+  }
+
+  function trafficCameraTooltipHtml({ primaryRoad, secondaryRoad, priorityLabel, priorityNote }) {
+    const primaryLabel = primaryRoad && String(primaryRoad).trim().length
+      ? escapeHtml(primaryRoad)
+      : 'Unknown primary road';
+    const secondaryLabel = secondaryRoad && String(secondaryRoad).trim().length
+      ? escapeHtml(secondaryRoad)
+      : 'Unknown secondary road';
+    const priorityMarkup = priorityLabel && String(priorityLabel).trim().length
+      ? `<div style="font-size:12px;font-weight:700;color:#16a34a;margin-bottom:6px;">${escapeHtml(priorityLabel)}</div>`
+      : '';
+    const noteMarkup = priorityNote && String(priorityNote).trim().length
+      ? `<div style="margin-top:8px;font-size:11px;color:#b91c1c;">${escapeHtml(priorityNote)}</div>`
+      : '';
+
+    return `
+      <div style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#0f172a;line-height:1.4;">
+        ${priorityMarkup}
+        <div style="font-weight:600;">Primary Road</div>
+        <div style="margin-bottom:6px;">${primaryLabel}</div>
+        <div style="font-weight:600;">Secondary Road</div>
+        <div>${secondaryLabel}</div>
+        ${noteMarkup}
+      </div>
+    `;
+  }
+
+  function ensureTrafficCameraPopup() {
+    if (!trafficCameraPopup) {
+      trafficCameraPopup = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        maxWidth: '240px'
+      });
+    }
+    return trafficCameraPopup;
+  }
+
+  function handleTrafficCameraHover(event) {
+    if (!map || !showTrafficCameras) {
+      handleTrafficCameraLeave();
+      return;
+    }
+    const feature = event.features?.[0];
+    if (!feature) {
+      handleTrafficCameraLeave();
+      return;
+    }
+
+    map.getCanvas().style.cursor = 'pointer';
+
+    const props = feature.properties ?? {};
+    const popup = ensureTrafficCameraPopup();
+    popup
+      .setLngLat(event.lngLat)
+      .setHTML(
+        trafficCameraTooltipHtml({
+          primaryRoad: props.primaryRoad,
+          secondaryRoad: props.secondaryRoad,
+          priorityLabel: props.priorityLabel,
+          priorityNote: props.priorityNote
+        })
+      )
+      .addTo(map);
+  }
+
+  function handleTrafficCameraLeave() {
+    if (map) {
+      map.getCanvas().style.cursor = '';
+    }
+    if (trafficCameraPopup) {
+      trafficCameraPopup.remove();
+      trafficCameraPopup = null;
+    }
+  }
+
+  function handleTrafficCameraClick(event) {
+    if (!showTrafficCameras) {
+      return;
+    }
+
+    if (event?.originalEvent) {
+      event.originalEvent.preventDefault?.();
+      event.originalEvent.stopPropagation?.();
+    }
+
+    handleTrafficCameraLeave();
+
+    const cameraSiteUrl = 'https://edmontontrafficcam.com/';
+    try {
+      window.open(cameraSiteUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      console.warn('Failed to open traffic camera site', error);
+    }
   }
 
   function handlePointHover(event) {
@@ -987,6 +1245,13 @@
 
     const emptyCollection = { type: 'FeatureCollection', features: [] };
 
+    if (!showTripData) {
+      pointSource.setData(emptyCollection);
+      segmentSource.setData(emptyCollection);
+      lastLoggedTripId = '';
+      return;
+    }
+
     if (viewMode !== 'single') {
       const loadedTrips = [];
       const pendingPromises = [];
@@ -1131,12 +1396,13 @@
     void viewMode;
     void tripSummaries;
     void tripCacheVersion;
+    void showTripData;
     updateTripPoints();
   }
 </script>
 
 <div class="flex h-full w-full overflow-hidden bg-white text-slate-900">
-  <aside class="w-72 shrink-0 border-r border-slate-200 bg-slate-50 p-4">
+  <aside class="w-72 shrink-0 h-full overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
     <h1 class="text-lg font-semibold text-slate-900">Initial Dataset Exploration</h1>
 
     {#if tripSummaries.length > 0}
@@ -1154,173 +1420,236 @@
           <span class="font-semibold text-slate-900">{totalFrictionTests}</span>
         </div>
         <div class="flex items-center justify-between">
+          <span class="text-slate-500">Total cameras</span>
+          <span class="font-semibold text-slate-900">{totalTrafficCameras}</span>
+        </div>
+        <div class="flex items-center justify-between">
           <span class="text-slate-500">Avg snapshots / trip</span>
           <span class="font-semibold text-slate-900">{averageSnapshots.toFixed(1)}</span>
         </div>
       </div>
 
       <div class="mt-6 border-t border-slate-200 pt-6">
-        <span class="text-sm font-medium text-slate-700">View mode</span>
-        <div class="mt-2 flex gap-2">
+        <span class="text-sm font-medium text-slate-700">Data toggles</span>
+        <div class="mt-3 space-y-3">
           <button
             type="button"
             class={
-              `inline-flex flex-1 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition ` +
-              (isSingleMode
-                ? 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm'
+              `inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm font-medium transition ` +
+              (showTripData
+                ? 'border-sky-500 bg-sky-50 text-sky-700 shadow-sm'
                 : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900')
             }
             on:click={() => {
-              viewMode = 'single';
-              segmentPopupPinned = false;
-              if (segmentHoverPopup) {
-                segmentHoverPopup.remove();
-                segmentHoverPopup = null;
-              }
-              setHighlightedTrip('');
+              showTripData = !showTripData;
             }}
           >
-            Single trip
+            <span>Show trip data</span>
+            <span
+              class={`ml-3 inline-flex h-5 w-9 items-center rounded-full border transition ` +
+                (showTripData
+                  ? 'border-sky-500 bg-sky-500'
+                  : 'border-slate-300 bg-slate-200')}
+            >
+              <span
+                class={`h-4 w-4 rounded-full bg-white shadow transition-transform transform ` +
+                  (showTripData ? 'translate-x-3.5' : 'translate-x-0.5')}
+              ></span>
+            </span>
           </button>
+
           <button
             type="button"
             class={
-              `inline-flex flex-1 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition ` +
-              (isSingleMode
-                ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
-                : 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm')
+              `inline-flex w-full items-center justify-between rounded-md border px-3 py-2 text-sm font-medium transition ` +
+              (showTrafficCameras
+                ? 'border-rose-500 bg-rose-50 text-rose-700 shadow-sm'
+                : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900')
             }
             on:click={() => {
-              viewMode = 'all';
-              allTripsBoundsNeedsUpdate = true;
-              segmentPopupPinned = false;
-              if (segmentHoverPopup) {
-                segmentHoverPopup.remove();
-                segmentHoverPopup = null;
-              }
-              setHighlightedTrip('');
+              showTrafficCameras = !showTrafficCameras;
             }}
           >
-            All trips
+            <span>Show traffic cameras</span>
+            <span
+              class={`ml-3 inline-flex h-5 w-9 items-center rounded-full border transition ` +
+                (showTrafficCameras
+                  ? 'border-rose-500 bg-rose-500'
+                  : 'border-slate-300 bg-slate-200')}
+            >
+              <span
+                class={`h-4 w-4 rounded-full bg-white shadow transition-transform transform ` +
+                  (showTrafficCameras ? 'translate-x-3.5' : 'translate-x-0.5')}
+              ></span>
+            </span>
           </button>
         </div>
-        {#if !isSingleMode}
-          <p class="mt-3 text-sm text-slate-500">
-            Showing all trip segments together (points hidden).
-          </p>
-        {/if}
       </div>
 
-      {#if isSingleMode}
+      {#if showTripData}
         <div class="mt-6 border-t border-slate-200 pt-6">
-          <h2 class="text-sm font-semibold text-slate-800">Trip</h2>
-          <p class="mt-1 text-sm text-slate-500">
-            Select a trip to highlight its snapshot locations on the map.
-          </p>
-          <label class="mt-3 block text-sm font-medium text-slate-700" for="trip-select">
-            Trip dataset
-          </label>
-          <select
-            id="trip-select"
-            bind:value={selectedTrip}
-            class="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
-          >
-            {#each tripSummaries as trip}
-              <option value={trip.id}>{trip.label}</option>
-            {/each}
-          </select>
+          <span class="text-sm font-medium text-slate-700">View mode</span>
+          <div class="mt-2 flex gap-2">
+            <button
+              type="button"
+              class={
+                `inline-flex flex-1 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition ` +
+                (isSingleMode
+                  ? 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900')
+              }
+              on:click={() => {
+                viewMode = 'single';
+                segmentPopupPinned = false;
+                if (segmentHoverPopup) {
+                  segmentHoverPopup.remove();
+                  segmentHoverPopup = null;
+                }
+                setHighlightedTrip('');
+              }}
+            >
+              Single trip
+            </button>
+            <button
+              type="button"
+              class={
+                `inline-flex flex-1 items-center justify-center rounded-md border px-3 py-2 text-sm font-medium transition ` +
+                (isSingleMode
+                  ? 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+                  : 'border-sky-500 bg-sky-100 text-sky-900 shadow-sm')
+              }
+              on:click={() => {
+                viewMode = 'all';
+                allTripsBoundsNeedsUpdate = true;
+                segmentPopupPinned = false;
+                if (segmentHoverPopup) {
+                  segmentHoverPopup.remove();
+                  segmentHoverPopup = null;
+                }
+                setHighlightedTrip('');
+              }}
+            >
+              All trips
+            </button>
+          </div>
+          {#if !isSingleMode}
+            <p class="mt-3 text-sm text-slate-500">
+              Showing all trip segments together (points hidden).
+            </p>
+          {/if}
+        </div>
 
-          <dl class="mt-6 space-y-2 text-sm text-slate-600">
-            <div class="flex items-center justify-between">
-              <dt>Snapshots</dt>
-              <dd class="font-medium text-slate-900">{selectedTripSummary?.recordCount ?? 0}</dd>
-            </div>
-            <div class="flex items-center justify-between">
-              <dt>Friction tests</dt>
-              <dd class="font-medium text-slate-900">
-                {selectedTripSummary?.frictionTestCount ?? 0}
-              </dd>
-            </div>
-            {#if selectedTripSummary?.snapshotInterval}
+        {#if isSingleMode}
+          <div class="mt-6 border-t border-slate-200 pt-6">
+            <h2 class="text-sm font-semibold text-slate-800">Trip</h2>
+            <p class="mt-1 text-sm text-slate-500">
+              Select a trip to highlight its snapshot locations on the map.
+            </p>
+            <label class="mt-3 block text-sm font-medium text-slate-700" for="trip-select">
+              Trip dataset
+            </label>
+            <select
+              id="trip-select"
+              bind:value={selectedTrip}
+              class="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-200"
+            >
+              {#each tripSummaries as trip}
+                <option value={trip.id}>{trip.label}</option>
+              {/each}
+            </select>
+
+            <dl class="mt-6 space-y-2 text-sm text-slate-600">
               <div class="flex items-center justify-between">
-                <dt>Interval (s)</dt>
+                <dt>Snapshots</dt>
+                <dd class="font-medium text-slate-900">{selectedTripSummary?.recordCount ?? 0}</dd>
+              </div>
+              <div class="flex items-center justify-between">
+                <dt>Friction tests</dt>
                 <dd class="font-medium text-slate-900">
-                  {selectedTripSummary.snapshotInterval}
+                  {selectedTripSummary?.frictionTestCount ?? 0}
                 </dd>
               </div>
-            {/if}
-          </dl>
-        </div>
-      {/if}
-
-      <div class="mt-8 border-t border-slate-200 pt-6">
-        <h2 class="text-sm font-semibold text-slate-800">Pinned snapshot</h2>
-        {#if selectedRecord}
-          <div class="mt-3 space-y-3">
-            <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-              <img
-                src={selectedRecord.imageUrl}
-                alt={`Snapshot ${selectedRecord.image}`}
-                class="h-40 w-full object-cover"
-              />
-            </div>
-            <dl class="space-y-2 text-sm text-slate-600">
-              <div class="flex items-center justify-between">
-                <dt>Frame</dt>
-                <dd class="font-medium text-slate-900">{selectedRecord.image}</dd>
-              </div>
-              {#if Number.isFinite(selectedRecord?.timestamp)}
+              {#if selectedTripSummary?.snapshotInterval}
                 <div class="flex items-center justify-between">
-                  <dt>Timestamp</dt>
-                  <dd class="font-medium text-slate-900">{selectedRecord.timestamp?.toFixed(1)} s</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedSpeedKmh)}
-                <div class="flex items-center justify-between">
-                  <dt>Speed (2D)</dt>
-                  <dd class="font-medium text-slate-900">{selectedSpeedKmh.toFixed(0)} km/h</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedSpeed3dKmh)}
-                <div class="flex items-center justify-between">
-                  <dt>Speed (3D)</dt>
-                  <dd class="font-medium text-slate-900">{selectedSpeed3dKmh.toFixed(0)} km/h</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedRecord?.altitude)}
-                <div class="flex items-center justify-between">
-                  <dt>Altitude</dt>
-                  <dd class="font-medium text-slate-900">{selectedRecord.altitude?.toFixed(0)} m</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedRecord?.precision)}
-                <div class="flex items-center justify-between">
-                  <dt>Precision</dt>
-                  <dd class="font-medium text-slate-900">±{selectedRecord.precision?.toFixed(1)} m</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedRecord?.gpsFix)}
-                <div class="flex items-center justify-between">
-                  <dt>GPS Fix</dt>
-                  <dd class="font-medium text-slate-900">{selectedRecord.gpsFix}</dd>
-                </div>
-              {/if}
-              {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
-                <div class="flex items-center justify-between">
-                  <dt>Location</dt>
+                  <dt>Interval (s)</dt>
                   <dd class="font-medium text-slate-900">
-                    {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
+                    {selectedTripSummary.snapshotInterval}
                   </dd>
                 </div>
               {/if}
             </dl>
           </div>
-        {:else}
-          <p class="mt-3 text-sm text-slate-500">
-            Hover markers to preview, click to pin the snapshot here.
-          </p>
         {/if}
-      </div>
+
+        <div class="mt-8 border-t border-slate-200 pt-6">
+          <h2 class="text-sm font-semibold text-slate-800">Pinned snapshot</h2>
+          {#if selectedRecord}
+            <div class="mt-3 space-y-3">
+              <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                <img
+                  src={selectedRecord.imageUrl}
+                  alt={`Snapshot ${selectedRecord.image}`}
+                  class="h-40 w-full object-cover"
+                />
+              </div>
+              <dl class="space-y-2 text-sm text-slate-600">
+                <div class="flex items-center justify-between">
+                  <dt>Frame</dt>
+                  <dd class="font-medium text-slate-900">{selectedRecord.image}</dd>
+                </div>
+                {#if Number.isFinite(selectedRecord?.timestamp)}
+                  <div class="flex items-center justify-between">
+                    <dt>Timestamp</dt>
+                    <dd class="font-medium text-slate-900">{selectedRecord.timestamp?.toFixed(1)} s</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedSpeedKmh)}
+                  <div class="flex items-center justify-between">
+                    <dt>Speed (2D)</dt>
+                    <dd class="font-medium text-slate-900">{selectedSpeedKmh.toFixed(0)} km/h</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedSpeed3dKmh)}
+                  <div class="flex items-center justify-between">
+                    <dt>Speed (3D)</dt>
+                    <dd class="font-medium text-slate-900">{selectedSpeed3dKmh.toFixed(0)} km/h</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedRecord?.altitude)}
+                  <div class="flex items-center justify-between">
+                    <dt>Altitude</dt>
+                    <dd class="font-medium text-slate-900">{selectedRecord.altitude?.toFixed(0)} m</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedRecord?.precision)}
+                  <div class="flex items-center justify-between">
+                    <dt>Precision</dt>
+                    <dd class="font-medium text-slate-900">±{selectedRecord.precision?.toFixed(1)} m</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedRecord?.gpsFix)}
+                  <div class="flex items-center justify-between">
+                    <dt>GPS Fix</dt>
+                    <dd class="font-medium text-slate-900">{selectedRecord.gpsFix}</dd>
+                  </div>
+                {/if}
+                {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
+                  <div class="flex items-center justify-between">
+                    <dt>Location</dt>
+                    <dd class="font-medium text-slate-900">
+                      {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
+                    </dd>
+                  </div>
+                {/if}
+              </dl>
+            </div>
+          {:else}
+            <p class="mt-3 text-sm text-slate-500">
+              Hover markers to preview, click to pin the snapshot here.
+            </p>
+          {/if}
+        </div>
+      {/if}
     {:else}
       <p class="mt-4 text-sm text-rose-600">
         No trip data found. Add `*_gps.json` files under the `snapshots/` directory.
