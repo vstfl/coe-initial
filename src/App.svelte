@@ -1,13 +1,23 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import maplibregl from 'maplibre-gl';
   import 'maplibre-gl/dist/maplibre-gl.css';
   import frictionManifest from './lib/friction-manifest.json';
   import trafficCamerasRaw from '../other_data/traffic_cameras_v2.json';
-  import demoData from './lib/demo-data.json';
-  import captureLogs from './lib/capture-logs.json';
 
   let currentPath = window.location.pathname;
+
+  onMount(() => {
+    window.addEventListener('popstate', () => {
+      currentPath = window.location.pathname;
+    });
+  });
+
+  function navigate(path) {
+    if (path === currentPath) return;
+    window.history.pushState({}, '', path);
+    currentPath = path;
+  }
 
   const frictionTripCounts = new Map(
     Object.entries(frictionManifest ?? {}).map(([tripId, count]) => [tripId, Number(count) || 0])
@@ -25,6 +35,9 @@
 
   function resolveImageUrl(name) {
     if (!name) return '';
+    if (currentPath === '/collection/demo') {
+      return `/demo-data/${selectedDataset}/${name}`;
+    }
     try {
       return new URL(`../snapshots/${name}`, import.meta.url).href;
     } catch (error) {
@@ -318,6 +331,12 @@
   let segmentPopupPinned = false;
   let selectedRecord = null;
   let fullscreenImage = null;
+  
+  // Demo Data State
+  let captureLogs = [];
+  let demoData = { snapshotCount: 0, tripTime: '' };
+  const datasets = ['test_1', 'testDrive_1'];
+  let selectedDataset = 'test_1';
   let selectedSpeedKmh = null;
   let selectedSpeed3dKmh = null;
   let viewMode = 'all';
@@ -366,11 +385,11 @@
       : null;
 
   $: if (map && mapLoaded && map.getLayer?.('traffic-cameras')) {
-    const visibility = showTrafficCameras ? 'visible' : 'none';
+    const visibility = showTrafficCameras && currentPath !== '/collection/demo' ? 'visible' : 'none';
     if (map.getLayoutProperty('traffic-cameras', 'visibility') !== visibility) {
       map.setLayoutProperty('traffic-cameras', 'visibility', visibility);
     }
-    if (!showTrafficCameras) {
+    if (!showTrafficCameras || currentPath === '/collection/demo') {
       handleTrafficCameraLeave();
     }
   }
@@ -1500,7 +1519,58 @@
     void tripSummaries;
     void tripCacheVersion;
     void showTripData;
+    void currentPath;
+    void selectedDataset;
     updateTripPoints();
+  }
+
+  $: if (currentPath === '/collection/demo') {
+    loadDemoData(selectedDataset);
+  }
+
+  $: if (currentPath) {
+    selectedRecord = null;
+    fullscreenImage = null;
+  }
+
+  async function loadDemoData(datasetId) {
+    try {
+      const response = await fetch(`/demo-data/${datasetId}/capture_logs.json`);
+      if (!response.ok) throw new Error('Failed to load demo data');
+      captureLogs = await response.json();
+      
+      // Calculate summary stats
+      const count = captureLogs.length;
+      let timeStr = 'N/A';
+      if (count > 0) {
+        const timestamps = captureLogs
+          .map(l => new Date(l.timestamp).getTime())
+          .filter(t => !isNaN(t));
+        if (timestamps.length > 0) {
+          const minTime = Math.min(...timestamps);
+          timeStr = new Date(minTime).toLocaleString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+        }
+      }
+      
+      demoData = {
+        snapshotCount: count,
+        tripTime: timeStr
+      };
+      
+      updateTripPoints();
+    } catch (error) {
+      console.error('Error loading demo data:', error);
+      captureLogs = [];
+      demoData = { snapshotCount: 0, tripTime: 'Error loading data' };
+      updateTripPoints();
+    }
   }
 </script>
 
@@ -1510,6 +1580,17 @@
       <h1 class="text-lg font-semibold text-slate-900">Trip Demo Data</h1>
 
       <div class="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm">
+        <div class="flex items-center justify-between">
+          <span class="text-slate-500">Dataset</span>
+          <select
+            bind:value={selectedDataset}
+            class="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-900 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+          >
+            {#each datasets as ds}
+              <option value={ds}>{ds}</option>
+            {/each}
+          </select>
+        </div>
         <div class="flex items-center justify-between">
           <span class="text-slate-500">Total snapshots</span>
           <span class="font-semibold text-slate-900">{demoData.snapshotCount}</span>
@@ -1840,6 +1921,32 @@
       </div>
     {/if}
   </section>
+
+  <!-- Floating Navigation Bar -->
+  <nav class="absolute top-6 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 shadow-lg backdrop-blur-sm">
+    <button
+      type="button"
+      class={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+        currentPath === '/'
+          ? 'bg-slate-900 text-white shadow-sm'
+          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+      }`}
+      on:click={() => navigate('/')}
+    >
+      Home
+    </button>
+    <button
+      type="button"
+      class={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors ${
+        currentPath === '/collection/demo'
+          ? 'bg-slate-900 text-white shadow-sm'
+          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+      }`}
+      on:click={() => navigate('/collection/demo')}
+    >
+      Demo
+    </button>
+  </nav>
 
   {#if fullscreenImage}
     <div

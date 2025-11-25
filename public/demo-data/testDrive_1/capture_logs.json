@@ -1,0 +1,112 @@
+[
+  {
+    "image": "IMG_2025-11-26_03-10-00_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-10-00_UofA.jpg",
+    "timestamp": "2025-11-26T08:10:00.434Z",
+    "gps": {
+      "latitude": 53.5292294,
+      "longitude": -113.5307738,
+      "accuracy": 46.50899887084961
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-10-33_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-10-33_UofA.jpg",
+    "timestamp": "2025-11-26T08:10:33.857Z",
+    "gps": {
+      "latitude": 53.5305237,
+      "longitude": -113.5307802,
+      "accuracy": 24.0310001373291
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-11-06_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-11-06_UofA.jpg",
+    "timestamp": "2025-11-26T08:11:06.536Z",
+    "gps": {
+      "latitude": 53.5298549,
+      "longitude": -113.5267799,
+      "accuracy": 19.14299964904785
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-11-39_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-11-39_UofA.jpg",
+    "timestamp": "2025-11-26T08:11:39.617Z",
+    "gps": {
+      "latitude": 53.5284616,
+      "longitude": -113.5212242,
+      "accuracy": 5.304999828338623
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-12-13_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-12-13_UofA.jpg",
+    "timestamp": "2025-11-26T08:12:13.770Z",
+    "gps": {
+      "latitude": 53.5259984,
+      "longitude": -113.5178392,
+      "accuracy": 4.076000213623047
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-12-47_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-12-47_UofA.jpg",
+    "timestamp": "2025-11-26T08:12:47.271Z",
+    "gps": {
+      "latitude": 53.5250187,
+      "longitude": -113.5179201,
+      "accuracy": 18.075000762939453
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-13-20_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-13-20_UofA.jpg",
+    "timestamp": "2025-11-26T08:13:20.385Z",
+    "gps": {
+      "latitude": 53.5227551,
+      "longitude": -113.5175618,
+      "accuracy": 35.59199905395508
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-13-53_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-13-53_UofA.jpg",
+    "timestamp": "2025-11-26T08:13:53.100Z",
+    "gps": {
+      "latitude": 53.522679,
+      "longitude": -113.5167781,
+      "accuracy": 34.55099868774414
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-14-25_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-14-25_UofA.jpg",
+    "timestamp": "2025-11-26T08:14:25.915Z",
+    "gps": {
+      "latitude": 53.5229273,
+      "longitude": -113.5181574,
+      "accuracy": 10.196999549865723
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-14-58_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-14-58_UofA.jpg",
+    "timestamp": "2025-11-26T08:14:58.262Z",
+    "gps": {
+      "latitude": 53.5226317,
+      "longitude": -113.5226344,
+      "accuracy": 77.5999984741211
+    }
+  },
+  {
+    "image": "IMG_2025-11-26_03-15-30_UofA.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-26_03-15-30_UofA.jpg",
+    "timestamp": "2025-11-26T08:15:30.877Z",
+    "gps": {
+      "latitude": 53.5234703,
+      "longitude": -113.5268864,
+      "accuracy": 39.599998474121094
+    }
+  }
+]
