@@ -4,6 +4,10 @@
   import 'maplibre-gl/dist/maplibre-gl.css';
   import frictionManifest from './lib/friction-manifest.json';
   import trafficCamerasRaw from '../other_data/traffic_cameras_v2.json';
+  import demoData from './lib/demo-data.json';
+  import captureLogs from './lib/capture-logs.json';
+
+  let currentPath = window.location.pathname;
 
   const frictionTripCounts = new Map(
     Object.entries(frictionManifest ?? {}).map(([tripId, count]) => [tripId, Number(count) || 0])
@@ -313,6 +317,7 @@
   let segmentHoverPopup;
   let segmentPopupPinned = false;
   let selectedRecord = null;
+  let fullscreenImage = null;
   let selectedSpeedKmh = null;
   let selectedSpeed3dKmh = null;
   let viewMode = 'all';
@@ -331,7 +336,7 @@
   $: if (selectedTrip) {
     console.log(`Selected trip changed to: ${selectedTrip}`);
   }
-  $: if (selectedRecord && selectedRecord.tripId !== currentTrip?.id) {
+  $: if (selectedRecord && !selectedRecord.isDemo && selectedRecord.tripId !== currentTrip?.id) {
     selectedRecord = null;
   }
   $: if (viewMode !== 'single') {
@@ -647,6 +652,37 @@
         map.getCanvas().addEventListener('mouseleave', handleSegmentLeave);
       }
 
+      if (!map.getSource('demo-points')) {
+        map.addSource('demo-points', {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] }
+        });
+
+        map.addLayer({
+          id: 'demo-points-fill',
+          type: 'circle',
+          source: 'demo-points',
+          paint: {
+            'circle-radius': [
+              'interpolate',
+              ['linear'],
+              ['zoom'],
+              8,
+              4,
+              14,
+              10
+            ],
+            'circle-color': '#22c55e',
+            'circle-stroke-color': '#f8fafc',
+            'circle-stroke-width': 1.5
+          }
+        });
+
+        map.on('mousemove', 'demo-points-fill', handlePointHover);
+        map.on('mouseleave', 'demo-points-fill', handlePointLeave);
+        map.on('click', 'demo-points-fill', handlePointClick);
+      }
+
       if (!map.getSource('traffic-cameras')) {
         map.addSource('traffic-cameras', {
           type: 'geojson',
@@ -728,6 +764,9 @@
         map.off('click', handleMapClick);
         map.getCanvas().removeEventListener('mouseleave', handleSegmentLeave);
         map.getCanvas().removeEventListener('mouseleave', handleTrafficCameraLeave);
+        map.off('mousemove', 'demo-points-fill', handlePointHover);
+        map.off('mouseleave', 'demo-points-fill', handlePointLeave);
+        map.off('click', 'demo-points-fill', handlePointClick);
         map.remove();
       }
 
@@ -793,7 +832,7 @@
     `;
   }
 
-  function featureTooltipHtml({ imageUrl, imageName, timestamp, speedKmh }) {
+  function featureTooltipHtml({ imageUrl, imageName, timestamp, speedKmh, lat, lon }) {
     const timeLabel = Number.isFinite(timestamp)
       ? `${timestamp.toFixed(1)} s`
       : 'n/a';
@@ -801,13 +840,23 @@
       ? `${speedKmh.toFixed(0)} km/h`
       : '–';
 
+    const metadataHtml =
+      lat !== undefined && lon !== undefined
+        ? `
+        <div style="opacity:0.75;">lat: ${lat.toFixed(5)}</div>
+        <div style="opacity:0.75;">lon: ${lon.toFixed(5)}</div>
+      `
+        : `
+        <div style="opacity:0.75;">t = ${timeLabel}</div>
+        <div style="opacity:0.75;">speed ≈ ${speedLabel}</div>
+      `;
+
     return `
       <div style="display:flex; gap:0.75rem; align-items:center;">
         <img src="${imageUrl}" alt="${escapeHtml(imageName)}" style="width:96px;height:64px;object-fit:cover;border-radius:0.5rem;box-shadow:0 6px 12px rgba(15,23,42,0.25);" />
         <div style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:12px;color:#0f172a;">
           <div style="font-weight:600;margin-bottom:2px;">${escapeHtml(imageName)}</div>
-          <div style="opacity:0.75;">t = ${timeLabel}</div>
-          <div style="opacity:0.75;">speed ≈ ${speedLabel}</div>
+          ${metadataHtml}
         </div>
       </div>
     `;
@@ -933,6 +982,11 @@
       : Number.isFinite(speed2dMs)
       ? speed2dMs * 3.6
       : null;
+    
+    // Demo data props
+    const lat = props.latitude;
+    const lon = props.longitude;
+
     const popup = ensureHoverPopup();
     popup
       .setLngLat(event.lngLat)
@@ -941,7 +995,9 @@
           imageUrl,
           imageName: props.image ?? 'Snapshot',
           timestamp,
-          speedKmh: resolvedSpeedKmh
+          speedKmh: resolvedSpeedKmh,
+          lat,
+          lon
         })
       )
       .addTo(map);
@@ -1206,7 +1262,9 @@
       precision: Number.isFinite(precision) ? precision : null,
       gpsFix: Number.isFinite(gpsFix) ? gpsFix : null,
       longitude: Number.isFinite(longitude) ? longitude : null,
-      latitude: Number.isFinite(latitude) ? latitude : null
+      latitude: Number.isFinite(latitude) ? latitude : null,
+      accuracy: Number.isFinite(Number(props.accuracy)) ? Number(props.accuracy) : null,
+      isDemo: props.isDemo || currentPath === '/collection/demo'
     };
 
     console.log(`Pinned snapshot: ${selectedRecord.image}`);
@@ -1234,6 +1292,51 @@
 
     const pointSource = map.getSource('trip-points');
     const segmentSource = map.getSource('trip-segments');
+    const demoSource = map.getSource('demo-points');
+
+    if (currentPath === '/collection/demo') {
+      // Clear standard layers
+      if (pointSource) pointSource.setData({ type: 'FeatureCollection', features: [] });
+      if (segmentSource) segmentSource.setData({ type: 'FeatureCollection', features: [] });
+
+      // Load demo points
+      if (demoSource) {
+        const demoFeatures = captureLogs.map((log, index) => {
+          const lat = log.gps?.latitude;
+          const lon = log.gps?.longitude;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+          
+          return {
+            type: 'Feature',
+            id: `demo-${index}`,
+            geometry: {
+              type: 'Point',
+              coordinates: [lon, lat]
+            },
+            properties: {
+              image: log.image,
+              image_url: resolveImageUrl(log.image), // Assuming images are in snapshots/
+              latitude: lat,
+              longitude: lon,
+              accuracy: log.gps?.accuracy,
+              isDemo: true
+            }
+          };
+        }).filter(Boolean);
+
+        demoSource.setData({
+          type: 'FeatureCollection',
+          features: demoFeatures
+        });
+
+        flyToFeatureCollection(demoFeatures, { maxZoom: 14, padding: 64 });
+      }
+      return;
+    } else {
+      // Clear demo layer
+      if (demoSource) demoSource.setData({ type: 'FeatureCollection', features: [] });
+    }
+
     if (
       !pointSource ||
       typeof pointSource.setData !== 'function' ||
@@ -1403,31 +1506,91 @@
 
 <div class="flex h-full w-full overflow-hidden bg-white text-slate-900">
   <aside class="w-72 shrink-0 h-full overflow-y-auto border-r border-slate-200 bg-slate-50 p-4">
-    <h1 class="text-lg font-semibold text-slate-900">Initial Dataset Exploration</h1>
+    {#if currentPath === '/collection/demo'}
+      <h1 class="text-lg font-semibold text-slate-900">Trip Demo Data</h1>
 
-    {#if tripSummaries.length > 0}
       <div class="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm">
         <div class="flex items-center justify-between">
-          <span class="text-slate-500">Total trips</span>
-          <span class="font-semibold text-slate-900">{totalTrips}</span>
-        </div>
-        <div class="flex items-center justify-between">
           <span class="text-slate-500">Total snapshots</span>
-          <span class="font-semibold text-slate-900">{totalSnapshots}</span>
+          <span class="font-semibold text-slate-900">{demoData.snapshotCount}</span>
         </div>
         <div class="flex items-center justify-between">
-          <span class="text-slate-500">Total friction tests</span>
-          <span class="font-semibold text-slate-900">{totalFrictionTests}</span>
-        </div>
-        <div class="flex items-center justify-between">
-          <span class="text-slate-500">Total cameras</span>
-          <span class="font-semibold text-slate-900">{totalTrafficCameras}</span>
-        </div>
-        <div class="flex items-center justify-between">
-          <span class="text-slate-500">Avg snapshots / trip</span>
-          <span class="font-semibold text-slate-900">{averageSnapshots.toFixed(1)}</span>
+          <span class="text-slate-500">Trip Time</span>
+          <span class="font-semibold text-slate-900 text-right">{demoData.tripTime}</span>
         </div>
       </div>
+
+      <div class="mt-8 border-t border-slate-200 pt-6">
+        <h2 class="text-sm font-semibold text-slate-800">Pinned snapshot</h2>
+        {#if selectedRecord && selectedRecord.isDemo}
+          <div class="mt-3 space-y-3">
+            <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <button
+                type="button"
+                class="block w-full cursor-zoom-in overflow-hidden transition-all hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2"
+                on:click={() => (fullscreenImage = selectedRecord.imageUrl)}
+              >
+                <img
+                  src={selectedRecord.imageUrl}
+                  alt={`Snapshot ${selectedRecord.image}`}
+                  class="h-40 w-full object-cover transition-transform duration-300 hover:scale-105"
+                />
+              </button>
+            </div>
+            <dl class="space-y-2 text-sm text-slate-600">
+              <div class="flex items-center justify-between">
+                <dt>Frame</dt>
+                <dd class="font-medium text-slate-900">{selectedRecord.image}</dd>
+              </div>
+              {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
+                <div class="flex items-center justify-between">
+                  <dt>Location</dt>
+                  <dd class="font-medium text-slate-900">
+                    {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
+                  </dd>
+                </div>
+              {/if}
+              {#if Number.isFinite(selectedRecord?.accuracy)}
+                <div class="flex items-center justify-between">
+                  <dt>Accuracy</dt>
+                  <dd class="font-medium text-slate-900">± {selectedRecord.accuracy?.toFixed(1)} m</dd>
+                </div>
+              {/if}
+            </dl>
+          </div>
+        {:else}
+          <p class="mt-3 text-sm text-slate-500">
+            Click a green point on the map to pin details here.
+          </p>
+        {/if}
+      </div>
+    {:else}
+      <h1 class="text-lg font-semibold text-slate-900">Dataset Explorer</h1>
+
+      {#if tripSummaries.length > 0}
+        <div class="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm">
+          <div class="flex items-center justify-between">
+            <span class="text-slate-500">Total trips</span>
+            <span class="font-semibold text-slate-900">{totalTrips}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-500">Total snapshots</span>
+            <span class="font-semibold text-slate-900">{totalSnapshots}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-500">Total friction tests</span>
+            <span class="font-semibold text-slate-900">{totalFrictionTests}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-500">Total cameras</span>
+            <span class="font-semibold text-slate-900">{totalTrafficCameras}</span>
+          </div>
+          <div class="flex items-center justify-between">
+            <span class="text-slate-500">Avg snapshots / trip</span>
+            <span class="font-semibold text-slate-900">{averageSnapshots.toFixed(1)}</span>
+          </div>
+        </div>
+
 
       <div class="mt-6 border-t border-slate-200 pt-6">
         <span class="text-sm font-medium text-slate-700">Data toggles</span>
@@ -1597,49 +1760,60 @@
                   <dt>Frame</dt>
                   <dd class="font-medium text-slate-900">{selectedRecord.image}</dd>
                 </div>
-                {#if Number.isFinite(selectedRecord?.timestamp)}
-                  <div class="flex items-center justify-between">
-                    <dt>Timestamp</dt>
-                    <dd class="font-medium text-slate-900">{selectedRecord.timestamp?.toFixed(1)} s</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedSpeedKmh)}
-                  <div class="flex items-center justify-between">
-                    <dt>Speed (2D)</dt>
-                    <dd class="font-medium text-slate-900">{selectedSpeedKmh.toFixed(0)} km/h</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedSpeed3dKmh)}
-                  <div class="flex items-center justify-between">
-                    <dt>Speed (3D)</dt>
-                    <dd class="font-medium text-slate-900">{selectedSpeed3dKmh.toFixed(0)} km/h</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedRecord?.altitude)}
-                  <div class="flex items-center justify-between">
-                    <dt>Altitude</dt>
-                    <dd class="font-medium text-slate-900">{selectedRecord.altitude?.toFixed(0)} m</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedRecord?.precision)}
-                  <div class="flex items-center justify-between">
-                    <dt>Precision</dt>
-                    <dd class="font-medium text-slate-900">±{selectedRecord.precision?.toFixed(1)} m</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedRecord?.gpsFix)}
-                  <div class="flex items-center justify-between">
-                    <dt>GPS Fix</dt>
-                    <dd class="font-medium text-slate-900">{selectedRecord.gpsFix}</dd>
-                  </div>
-                {/if}
-                {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
-                  <div class="flex items-center justify-between">
-                    <dt>Location</dt>
-                    <dd class="font-medium text-slate-900">
-                      {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
-                    </dd>
-                  </div>
+                {#if selectedRecord.isDemo}
+                  {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
+                    <div class="flex items-center justify-between">
+                      <dt>Location</dt>
+                      <dd class="font-medium text-slate-900">
+                        {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
+                      </dd>
+                    </div>
+                  {/if}
+                {:else}
+                  {#if Number.isFinite(selectedRecord?.timestamp)}
+                    <div class="flex items-center justify-between">
+                      <dt>Timestamp</dt>
+                      <dd class="font-medium text-slate-900">{selectedRecord.timestamp?.toFixed(1)} s</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedSpeedKmh)}
+                    <div class="flex items-center justify-between">
+                      <dt>Speed (2D)</dt>
+                      <dd class="font-medium text-slate-900">{selectedSpeedKmh.toFixed(0)} km/h</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedSpeed3dKmh)}
+                    <div class="flex items-center justify-between">
+                      <dt>Speed (3D)</dt>
+                      <dd class="font-medium text-slate-900">{selectedSpeed3dKmh.toFixed(0)} km/h</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedRecord?.altitude)}
+                    <div class="flex items-center justify-between">
+                      <dt>Altitude</dt>
+                      <dd class="font-medium text-slate-900">{selectedRecord.altitude?.toFixed(0)} m</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedRecord?.precision)}
+                    <div class="flex items-center justify-between">
+                      <dt>Precision</dt>
+                      <dd class="font-medium text-slate-900">±{selectedRecord.precision?.toFixed(1)} m</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedRecord?.gpsFix)}
+                    <div class="flex items-center justify-between">
+                      <dt>GPS Fix</dt>
+                      <dd class="font-medium text-slate-900">{selectedRecord.gpsFix}</dd>
+                    </div>
+                  {/if}
+                  {#if Number.isFinite(selectedRecord?.latitude) && Number.isFinite(selectedRecord?.longitude)}
+                    <div class="flex items-center justify-between">
+                      <dt>Location</dt>
+                      <dd class="font-medium text-slate-900">
+                        {selectedRecord.latitude?.toFixed(5)}, {selectedRecord.longitude?.toFixed(5)}
+                      </dd>
+                    </div>
+                  {/if}
                 {/if}
               </dl>
             </div>
@@ -1655,6 +1829,7 @@
         No trip data found. Add `*_gps.json` files under the `snapshots/` directory.
       </p>
     {/if}
+  {/if}
   </aside>
 
   <section class="relative flex-1 min-h-0">
@@ -1665,4 +1840,36 @@
       </div>
     {/if}
   </section>
+
+  {#if fullscreenImage}
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/90 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      on:click|self={() => (fullscreenImage = null)}
+    >
+      <button
+        type="button"
+        class="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white/50"
+        on:click={() => (fullscreenImage = null)}
+        aria-label="Close fullscreen view"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke-width="2"
+          stroke="currentColor"
+          class="h-6 w-6"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+      <img
+        src={fullscreenImage}
+        alt="Fullscreen view"
+        class="max-h-[90vh] max-w-[90vw] rounded-lg object-contain shadow-2xl"
+      />
+    </div>
+  {/if}
 </div>

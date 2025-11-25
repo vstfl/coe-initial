@@ -1,0 +1,102 @@
+[
+  {
+    "image": "IMG_2025-11-25_23-41-54.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-41-54.jpg",
+    "timestamp": "2025-11-26T04:41:54.559Z",
+    "gps": {
+      "latitude": 53.5218332,
+      "longitude": -113.5002553,
+      "accuracy": 18.80699920654297
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-02.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-02.jpg",
+    "timestamp": "2025-11-26T04:42:02.314Z",
+    "gps": {
+      "latitude": 53.5218332,
+      "longitude": -113.5002553,
+      "accuracy": 18.80699920654297
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-08.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-08.jpg",
+    "timestamp": "2025-11-26T04:42:08.214Z",
+    "gps": {
+      "latitude": 53.5218162,
+      "longitude": -113.5002926,
+      "accuracy": 11.956999778747559
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-17.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-17.jpg",
+    "timestamp": "2025-11-26T04:42:17.153Z",
+    "gps": {
+      "latitude": 53.5218162,
+      "longitude": -113.5002926,
+      "accuracy": 11.956999778747559
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-23.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-23.jpg",
+    "timestamp": "2025-11-26T04:42:23.051Z",
+    "gps": {
+      "latitude": 53.5210892,
+      "longitude": -113.5005309,
+      "accuracy": 46.665000915527344
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-43.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-43.jpg",
+    "timestamp": "2025-11-26T04:42:43.758Z",
+    "gps": {
+      "latitude": 53.52084,
+      "longitude": -113.5005941,
+      "accuracy": 20.08799934387207
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-51.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-51.jpg",
+    "timestamp": "2025-11-26T04:42:51.235Z",
+    "gps": {
+      "latitude": 53.52084,
+      "longitude": -113.5005941,
+      "accuracy": 20.08799934387207
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-42-57.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-42-57.jpg",
+    "timestamp": "2025-11-26T04:42:57.167Z",
+    "gps": {
+      "latitude": 53.5212143,
+      "longitude": -113.500455,
+      "accuracy": 18.548999786376953
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-43-06.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-43-06.jpg",
+    "timestamp": "2025-11-26T04:43:06.056Z",
+    "gps": {
+      "latitude": 53.5212143,
+      "longitude": -113.500455,
+      "accuracy": 18.548999786376953
+    }
+  },
+  {
+    "image": "IMG_2025-11-25_23-43-11.jpg",
+    "imageUri": "file:///storage/emulated/0/Pictures/RoadCapture/IMG_2025-11-25_23-43-11.jpg",
+    "timestamp": "2025-11-26T04:43:11.988Z",
+    "gps": {
+      "latitude": 53.520826,
+      "longitude": -113.5006222,
+      "accuracy": 11.215999603271484
+    }
+  }
+]
