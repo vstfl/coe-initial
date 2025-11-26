@@ -4,6 +4,7 @@
   import 'maplibre-gl/dist/maplibre-gl.css';
   import frictionManifest from './lib/friction-manifest.json';
   import trafficCamerasRaw from '../other_data/traffic_cameras_v2.json';
+  import { fetchRoads, snapPointsToRoads } from './lib/snapping.js';
 
   let currentPath = window.location.pathname;
 
@@ -336,7 +337,7 @@
   let captureLogs = [];
   let demoData = { snapshotCount: 0, tripTime: '' };
   const datasets = ['test_1', 'testDrive_1'];
-  let selectedDataset = 'test_1';
+  let selectedDataset = 'testDrive_1';
   let selectedSpeedKmh = null;
   let selectedSpeed3dKmh = null;
   let viewMode = 'all';
@@ -345,6 +346,51 @@
   let highlightedTripId = '';
   let tripCacheVersion = 0;
   let allTripsBoundsNeedsUpdate = true;
+
+  // Snapping State
+  let snappingEnabled = false;
+  let snappingRoads = [];
+  let roadInput = '';
+  let roadNetwork = null;
+  let isSnappingLoading = false;
+
+  async function updateSnappingData() {
+    if (!snappingEnabled || snappingRoads.length === 0) {
+      roadNetwork = null;
+      updateTripPoints();
+      return;
+    }
+
+    isSnappingLoading = true;
+    try {
+      // Get map bounds or default to Edmonton
+      const bounds = map ? map.getBounds().toArray().flat() : [-113.7, 53.4, -113.3, 53.7];
+      roadNetwork = await fetchRoads(snappingRoads, bounds);
+      updateTripPoints();
+    } catch (e) {
+      console.error(e);
+    } finally {
+      isSnappingLoading = false;
+    }
+  }
+
+  function toggleSnapping() {
+    snappingEnabled = !snappingEnabled;
+    updateSnappingData();
+  }
+
+  function addRoad() {
+    if (roadInput && !snappingRoads.includes(roadInput)) {
+      snappingRoads = [...snappingRoads, roadInput];
+      roadInput = '';
+      updateSnappingData();
+    }
+  }
+
+  function removeRoad(road) {
+    snappingRoads = snappingRoads.filter(r => r !== road);
+    updateSnappingData();
+  }
 
   $: tripSummaryMap = new Map(tripSummaries.map((summary) => [summary.id, summary]));
   $: currentTrip = tripCache.get(selectedTrip) ?? null;
@@ -1320,7 +1366,7 @@
 
       // Load demo points
       if (demoSource) {
-        const demoFeatures = captureLogs.map((log, index) => {
+        let demoFeatures = captureLogs.map((log, index) => {
           const lat = log.gps?.latitude;
           const lon = log.gps?.longitude;
           if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
@@ -1342,6 +1388,10 @@
             }
           };
         }).filter(Boolean);
+
+        if (snappingEnabled && roadNetwork) {
+          demoFeatures = snapPointsToRoads(demoFeatures, roadNetwork);
+        }
 
         demoSource.setData({
           type: 'FeatureCollection',
@@ -1599,6 +1649,75 @@
           <span class="text-slate-500">Trip Time</span>
           <span class="font-semibold text-slate-900 text-right">{demoData.tripTime}</span>
         </div>
+      </div>
+
+      <!-- Snapping UI -->
+      <div class="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3 text-sm shadow-sm">
+        <div class="flex items-center justify-between">
+          <span class="font-medium text-slate-700">Snapping</span>
+          <button
+            type="button"
+            class={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 ${snappingEnabled ? 'bg-sky-500' : 'bg-slate-200'}`}
+            role="switch"
+            aria-checked={snappingEnabled}
+            on:click={toggleSnapping}
+          >
+            <span
+              aria-hidden="true"
+              class={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${snappingEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+            ></span>
+          </button>
+        </div>
+
+        {#if snappingEnabled}
+          <div class="mt-3 border-t border-slate-200 pt-3">
+            <p class="mb-2 text-xs text-slate-500">
+              Points within 500m of these roads will be snapped to the road network.
+            </p>
+            
+            <div class="flex gap-2">
+              <input
+                type="text"
+                bind:value={roadInput}
+                placeholder="Enter road name (e.g. 116 Street)"
+                class="flex-1 rounded-md border border-slate-300 px-2 py-1 text-xs focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                on:keydown={(e) => e.key === 'Enter' && addRoad()}
+              />
+              <button
+                type="button"
+                class="rounded-md bg-sky-500 px-2 py-1 text-xs font-medium text-white hover:bg-sky-600 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-1"
+                on:click={addRoad}
+                disabled={!roadInput}
+              >
+                Add
+              </button>
+            </div>
+
+            {#if isSnappingLoading}
+              <div class="mt-2 text-xs text-slate-500">Loading road data...</div>
+            {/if}
+
+            {#if snappingRoads.length > 0}
+              <ul class="mt-2 space-y-1">
+                {#each snappingRoads as road}
+                  <li class="flex items-center justify-between rounded bg-slate-100 px-2 py-1 text-xs">
+                    <span>{road}</span>
+                    <button
+                      type="button"
+                      class="text-slate-400 hover:text-rose-500"
+                      on:click={() => removeRoad(road)}
+                      aria-label={`Remove ${road}`}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="h-4 w-4">
+                        <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z" />
+                      </svg>
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </div>
+        {/if}
       </div>
 
       <div class="mt-8 border-t border-slate-200 pt-6">

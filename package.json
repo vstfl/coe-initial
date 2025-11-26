@@ -12,6 +12,7 @@
     "friction:manifest": "node scripts/build-friction-manifest.mjs"
   },
   "devDependencies": {
+    "@rollup/rollup-win32-x64-msvc": "^4.53.3",
     "@sveltejs/vite-plugin-svelte": "^3.1.1",
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.35",
@@ -21,6 +22,7 @@
     "vite": "^5.2.0"
   },
   "dependencies": {
+    "@turf/turf": "^7.3.0",
     "maplibre-gl": "^4.1.2"
   }
 }
