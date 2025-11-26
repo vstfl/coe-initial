@@ -3,7 +3,7 @@
 
   function navigate(path) {
     if (path === $currentPath) return;
-    window.history.pushState({}, '', path);
+    window.location.hash = path;
     currentPath.set(path);
   }
 </script>

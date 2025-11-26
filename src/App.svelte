@@ -475,9 +475,19 @@
   
   // Navigation handling
   onMount(() => {
-    window.addEventListener('popstate', () => {
-      currentPath.set(window.location.pathname);
-    });
+    const handleHashChange = () => {
+      const path = window.location.hash.slice(1) || '/';
+      currentPath.set(path);
+    };
+
+    window.addEventListener('hashchange', handleHashChange);
+    
+    // Handle initial hash
+    handleHashChange();
+
+    return () => {
+      window.removeEventListener('hashchange', handleHashChange);
+    };
   });
 
   // Derived values for Sidebar

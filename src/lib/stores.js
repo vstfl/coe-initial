@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 
 export const selectedTripId = writable(null);
-export const currentPath = writable(window.location.pathname);
+export const currentPath = writable(window.location.hash.slice(1) || '/');
 export const viewMode = writable('all'); // 'all' | 'single'
 export const showTripData = writable(true);
 export const showTrafficCameras = writable(true);
