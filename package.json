@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/build-friction-manifest.mjs",
-    "build": "vite build",
+    "build": "vite build && node scripts/copy-demo-data.mjs",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig tsconfig.json",
     "friction:manifest": "node scripts/build-friction-manifest.mjs"

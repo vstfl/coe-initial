@@ -46,7 +46,8 @@
   function resolveImageUrl(name) {
     if (!name) return '';
     if ($currentPath === '/collection/demo') {
-      return `/demo-data/${$selectedDataset}/${name}`;
+      const baseUrl = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+      return `${baseUrl}demo-data/${$selectedDataset}/${name}`;
     }
     try {
       return new URL(`../snapshots/${name}`, import.meta.url).href;
@@ -351,7 +352,8 @@
   // Demo Data Loading
   async function loadDemoData(datasetId) {
     try {
-      const response = await fetch(`/demo-data/${datasetId}/capture_logs.json`);
+      const baseUrl = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+      const response = await fetch(`${baseUrl}demo-data/${datasetId}/capture_logs.json`);
       if (!response.ok) throw new Error('Failed to load demo data');
       captureLogs = await response.json();
       
