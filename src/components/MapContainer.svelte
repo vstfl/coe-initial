@@ -37,6 +37,7 @@
   let trafficCameraPopup;
   let segmentHoverPopup;
   let segmentPopupPinned = false;
+  let isHoveringPoint = false;
 
   const maptilerKey =
     import.meta.env.VITE_MAPTILER_API_KEY ??
@@ -456,9 +457,16 @@
 
   function handlePointHover(e) {
     if (!e.features?.length) return;
+    isHoveringPoint = true;
     map.getCanvas().style.cursor = "pointer";
     const feature = e.features[0];
     const props = feature.properties;
+
+    // Explicitly close segment popup if it's open to prevent double tooltips
+    if (segmentHoverPopup) {
+      segmentHoverPopup.remove();
+      segmentHoverPopup = null;
+    }
 
     // Use a unique ID for the point to prevent re-rendering if already hovering
     // Since points might not have unique IDs in GeoJSON, we can construct one or use coordinates
@@ -536,6 +544,7 @@
   }
 
   function handlePointLeave() {
+    isHoveringPoint = false;
     map.getCanvas().style.cursor = "";
 
     popupCloseTimer = setTimeout(() => {
@@ -592,10 +601,17 @@
   function handleTrafficCameraHover(e) {
     if (!e.features?.length || !$showTrafficCameras) return;
 
+    isHoveringPoint = true;
     map.getCanvas().style.cursor = "pointer";
     const feature = e.features[0];
     const props = feature.properties;
     const cameraId = feature.id || props.code || props.StreamCode;
+
+    // Explicitly close segment popup if it's open to prevent double tooltips
+    if (segmentHoverPopup) {
+      segmentHoverPopup.remove();
+      segmentHoverPopup = null;
+    }
 
     // If we are already hovering this camera and popup is open, don't re-render
     if (
@@ -710,6 +726,7 @@
   let popupCloseTimer = null;
 
   function handleTrafficCameraLeave() {
+    isHoveringPoint = false;
     map.getCanvas().style.cursor = "";
     // Delay removal to allow moving to the popup
     popupCloseTimer = setTimeout(() => {
@@ -770,6 +787,32 @@
   function handleSegmentHover(e) {
     if ($viewMode === "single" || !$showTripData || segmentPopupPinned) return;
 
+    // Check if we are hovering over a point feature (trip point, demo point, or traffic camera)
+    // If so, prioritize the point tooltip and do not show the segment tooltip.
+    // Also check if the point tooltip is already open.
+    if (hoverPopup && hoverPopup.isOpen()) {
+      handleSegmentLeave();
+      return;
+    }
+
+    const tolerance = 5; // Use a small tolerance for point detection
+    const bbox = [
+      [e.point.x - tolerance, e.point.y - tolerance],
+      [e.point.x + tolerance, e.point.y + tolerance],
+    ];
+    const pointFeatures = map.queryRenderedFeatures(bbox, {
+      layers: [
+        LAYER_IDS.TRIP_POINTS_FILL,
+        LAYER_IDS.DEMO_POINTS_FILL,
+        LAYER_IDS.TRAFFIC_CAMERAS,
+      ],
+    });
+
+    if (pointFeatures.length > 0) {
+      handleSegmentLeave(); // Ensure any existing segment tooltip is closed
+      return;
+    }
+
     const features = querySegmentsNearPoint(e.point);
     console.log(
       "MapContainer: handleSegmentHover features found:",
@@ -794,7 +837,7 @@
   }
 
   function handleSegmentLeave() {
-    if (!segmentPopupPinned) {
+    if (!segmentPopupPinned && !isHoveringPoint) {
       map.getCanvas().style.cursor = "";
       if (segmentHoverPopup) {
         segmentHoverPopup.remove();
